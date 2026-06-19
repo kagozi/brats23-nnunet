@@ -1,0 +1,70 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nnunet-predict-brats23
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+      containers:
+        - name: predictor
+          image: ghcr.io/kagozi/brats23-cwdm:latest
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              INPUT_DIR=/pvc/nnunet/imagesTs/${DATA_SPLIT}
+              PRED_DIR=/pvc/nnunet/predictions/${DATA_SPLIT}/dataset${MODEL_DATASET}
+
+              python /workspace/reformat_inputs.py \
+                --data_dir /pvc/brats23 \
+                --output_dir ${INPUT_DIR} \
+                --split ${DATA_SPLIT}
+
+              mkdir -p ${PRED_DIR}
+
+              nnUNetv2_predict \
+                -i ${INPUT_DIR} \
+                -o ${PRED_DIR} \
+                -d ${MODEL_DATASET} \
+                -c 3d_fullres \
+                -f 5
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: DATA_SPLIT
+              value: "test"
+            - name: MODEL_DATASET
+              value: "137"
+          resources:
+            requests:
+              cpu: "6"
+              memory: "20Gi"
+            limits:
+              cpu: "7"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-A100-SXM4-80GB
+                      - NVIDIA-A100-80GB-PCIe

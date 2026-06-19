@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-model-dataset137
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+      containers:
+        - name: downloader
+          image: ghcr.io/kagozi/brats23-cwdm:latest
+          command:
+            - python
+            - /workspace/download_model.py
+            - --output_dir
+            - /pvc/nnunet/results/Dataset137_BraTS2021
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
