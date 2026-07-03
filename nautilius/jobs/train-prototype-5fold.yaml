@@ -565,7 +565,7 @@ spec:
           effect: PreferNoSchedule
       containers:
         - name: trainer
-          image: ghcr.io/kagozi/brats23-cwdm:latest
+          image: ghcr.io/kagozi/brats23-nnunet:latest
           imagePullPolicy: Always
           command: ["python", "/scripts/run_prototype_nnunet_5fold.py"]
           args:
@@ -641,7 +641,7 @@ spec:
           effect: PreferNoSchedule
       containers:
         - name: trainer
-          image: ghcr.io/kagozi/brats23-cwdm:latest
+          image: ghcr.io/kagozi/brats23-nnunet:latest
           imagePullPolicy: Always
           command: ["python", "/scripts/run_prototype_nnunet_5fold.py"]
           args:
@@ -717,7 +717,7 @@ spec:
           effect: PreferNoSchedule
       containers:
         - name: trainer
-          image: ghcr.io/kagozi/brats23-cwdm:latest
+          image: ghcr.io/kagozi/brats23-nnunet:latest
           imagePullPolicy: Always
           command: ["python", "/scripts/run_prototype_nnunet_5fold.py"]
           args:
@@ -793,7 +793,7 @@ spec:
           effect: PreferNoSchedule
       containers:
         - name: trainer
-          image: ghcr.io/kagozi/brats23-cwdm:latest
+          image: ghcr.io/kagozi/brats23-nnunet:latest
           imagePullPolicy: Always
           command: ["python", "/scripts/run_prototype_nnunet_5fold.py"]
           args:
@@ -869,7 +869,7 @@ spec:
           effect: PreferNoSchedule
       containers:
         - name: trainer
-          image: ghcr.io/kagozi/brats23-cwdm:latest
+          image: ghcr.io/kagozi/brats23-nnunet:latest
           imagePullPolicy: Always
           command: ["python", "/scripts/run_prototype_nnunet_5fold.py"]
           args:

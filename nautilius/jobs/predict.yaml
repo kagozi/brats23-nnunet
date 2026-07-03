@@ -14,7 +14,7 @@ spec:
             claimName: brats23-pvc
       containers:
         - name: predictor
-          image: ghcr.io/kagozi/brats23-cwdm:latest
+          image: ghcr.io/kagozi/brats23-nnunet:latest
           command:
             - bash
             - -c
