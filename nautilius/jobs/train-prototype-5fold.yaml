@@ -317,8 +317,11 @@ data:
 
         def prototype_hook(module, inputs, output):
             proto_out = prototype_block(output)
-            fused = proto_out.get("x_fused") or proto_out.get("fused_features")
-            if fused is None:
+            if "x_fused" in proto_out:
+                fused = proto_out["x_fused"]
+            elif "fused_features" in proto_out:
+                fused = proto_out["fused_features"]
+            else:
                 raise KeyError(f"Prototype output keys: {proto_out.keys()}")
             hook_cache["proto_similarity"] = proto_out.get("proto_similarity")
             hook_cache["class_evidence"] = proto_out.get("class_evidence")
@@ -611,16 +614,6 @@ spec:
         - name: script-vol
           configMap:
             name: prototype-nnunet-script
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 1 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -687,16 +680,6 @@ spec:
         - name: script-vol
           configMap:
             name: prototype-nnunet-script
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 2 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -763,16 +746,6 @@ spec:
         - name: script-vol
           configMap:
             name: prototype-nnunet-script
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 3 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -839,16 +812,6 @@ spec:
         - name: script-vol
           configMap:
             name: prototype-nnunet-script
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 4 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -915,13 +878,4 @@ spec:
         - name: script-vol
           configMap:
             name: prototype-nnunet-script
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
+
