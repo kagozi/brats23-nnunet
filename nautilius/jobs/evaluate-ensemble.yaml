@@ -226,10 +226,10 @@ data:
     def main():
         parser = argparse.ArgumentParser()
         parser.add_argument("--checkpoint_dir", required=True)
-        parser.add_argument("--split_json", required=True)
         parser.add_argument("--data_dir", required=True)
         parser.add_argument("--nnunet_results", required=True)
         parser.add_argument("--output_dir", required=True)
+        parser.add_argument("--split_json", default=None)
         parser.add_argument("--num_workers", type=int, default=2)
         args = parser.parse_args()
 
@@ -245,11 +245,15 @@ data:
         os.environ.setdefault("nnUNet_raw", str(out_dir / "nnunet_raw"))
         os.environ.setdefault("nnUNet_preprocessed", str(out_dir / "nnunet_preprocessed"))
 
-        with open(args.split_json) as f:
-            split = json.load(f)
-
-        all_cases = sorted({c for fd in split.values() for c in fd["val"]})
-        print(f"Cases to evaluate: {len(all_cases)}")
+        if args.split_json:
+            with open(args.split_json) as f:
+                split = json.load(f)
+            all_cases = sorted({c for fd in split.values() for c in fd["val"]})
+            print(f"Cases to evaluate (from split JSON val sets): {len(all_cases)}")
+        else:
+            data_dir = Path(args.data_dir)
+            all_cases = sorted([p.name for p in data_dir.iterdir() if p.is_dir() and p.name.startswith("BraTS-")])
+            print(f"Cases to evaluate (all in {args.data_dir}): {len(all_cases)}")
 
         checkpoint_dir = Path(args.checkpoint_dir)
         fold_models = []
@@ -365,8 +369,7 @@ spec:
           command: ["python", "/scripts/evaluate_ensemble.py"]
           args:
             - "--checkpoint_dir=/pvc/outputs/prototype_nnunet_5fold"
-            - "--split_json=/pvc/outputs/prototype_nnunet_5fold/prototype_5fold_split.json"
-            - "--data_dir=/pvc/data/brats23/train"
+            - "--data_dir=/pvc/data/brats23/test"
             - "--nnunet_results=/pvc/nnunet/results"
             - "--output_dir=/pvc/outputs/prototype_nnunet_5fold"
             - "--num_workers=2"
@@ -381,14 +384,13 @@ spec:
               value: "/pvc/nnunet/results"
           resources:
             requests:
-              memory: "28Gi"
+              memory: "20Gi"
               cpu: "6"
               nvidia.com/gpu: "1"
             limits:
-              memory: "32Gi"
+              memory: "24Gi"
               cpu: "7"
               nvidia.com/gpu: "1"
-              ephemeral-storage: "20Gi"
           volumeMounts:
             - name: brats23-vol
               mountPath: /pvc

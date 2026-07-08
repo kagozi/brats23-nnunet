@@ -229,12 +229,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint_dir", required=True,
                         help="Dir containing prototype_fold{N}_best.pth")
-    parser.add_argument("--split_json", required=True,
-                        help="prototype_5fold_split.json from training")
     parser.add_argument("--data_dir", required=True,
-                        help="Root dir of BraTS cases (containing BraTS-*/)")
+                        help="Root dir of BraTS cases to evaluate (containing BraTS-*/)")
     parser.add_argument("--nnunet_results", required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--split_json", default=None,
+                        help="If set, evaluate only the val cases from this 5-fold split JSON")
     parser.add_argument("--num_workers", type=int, default=2)
     args = parser.parse_args()
 
@@ -250,12 +250,15 @@ def main():
     os.environ.setdefault("nnUNet_raw", str(out_dir / "nnunet_raw"))
     os.environ.setdefault("nnUNet_preprocessed", str(out_dir / "nnunet_preprocessed"))
 
-    with open(args.split_json) as f:
-        split = json.load(f)
-
-    # Collect all val cases — covers the full dataset, each case held out in exactly one fold
-    all_cases = sorted({c for fd in split.values() for c in fd["val"]})
-    print(f"Cases to evaluate: {len(all_cases)}")
+    if args.split_json:
+        with open(args.split_json) as f:
+            split = json.load(f)
+        all_cases = sorted({c for fd in split.values() for c in fd["val"]})
+        print(f"Cases to evaluate (from split JSON val sets): {len(all_cases)}")
+    else:
+        data_dir = Path(args.data_dir)
+        all_cases = sorted([p.name for p in data_dir.iterdir() if p.is_dir() and p.name.startswith("BraTS-")])
+        print(f"Cases to evaluate (all in {args.data_dir}): {len(all_cases)}")
 
     # Load all 5 fold models upfront (~620MB VRAM total for weights)
     checkpoint_dir = Path(args.checkpoint_dir)
