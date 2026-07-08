@@ -138,6 +138,43 @@ data:
         np.random.seed(seed)
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = False
+
+
+    def validate_cases(case_names, data_dir):
+        modalities = ["t1n", "t1c", "t2w", "t2f"]
+        valid, skipped = [], []
+        for case in case_names:
+            case_dir = Path(data_dir) / case
+            ok = True
+            for mod in modalities:
+                f = case_dir / f"{case}-{mod}.nii.gz"
+                if not f.exists():
+                    ok = False
+                    break
+                try:
+                    nib.load(str(f)).header
+                except Exception:
+                    ok = False
+                    break
+            if ok:
+                seg_f = case_dir / f"{case}-seg.nii.gz"
+                if not seg_f.exists():
+                    ok = False
+                else:
+                    try:
+                        nib.load(str(seg_f)).header
+                    except Exception:
+                        ok = False
+            if ok:
+                valid.append(case)
+            else:
+                skipped.append(case)
+        if skipped:
+            print(f"Skipping {len(skipped)} invalid/corrupted cases: {skipped}")
+        print(f"Valid cases after validation: {len(valid)} / {len(case_names)}")
+        return valid
 
 
     def create_5fold_split(case_names, out_json, seed=42):
@@ -194,6 +231,13 @@ data:
         return params
 
 
+    def collate_skip_none(batch):
+        batch = [b for b in batch if b is not None]
+        if not batch:
+            return None
+        return torch.utils.data.dataloader.default_collate(batch)
+
+
     class BraTSPatchDataset(Dataset):
         def __init__(self, case_names, data_dir, patch_size=(128, 128, 128)):
             self.case_names = case_names
@@ -235,30 +279,34 @@ data:
         def __getitem__(self, idx):
             case = self.case_names[idx]
             case_dir = self.data_dir / case
-            imgs = []
-            for mod in self.modalities:
-                f = case_dir / f"{case}-{mod}.nii.gz"
-                if not f.exists():
-                    raise FileNotFoundError(f"Missing modality file: {f}")
-                x = self._load_nii(f)
-                x = self._normalize(x)
-                x = self._center_crop_or_pad(x, self.patch_size)
-                imgs.append(x)
-            image = np.stack(imgs, axis=0)
-            seg_f = case_dir / f"{case}-seg.nii.gz"
-            if not seg_f.exists():
-                raise FileNotFoundError(f"Missing segmentation file: {seg_f}")
-            seg = self._load_nii(seg_f).astype(np.int64)
-            seg = self._center_crop_or_pad(seg, self.patch_size)
-            wt = (seg > 0).astype(np.float32)
-            tc = np.logical_or(seg == 1, seg == 3).astype(np.float32)
-            et = (seg == 3).astype(np.float32)
-            target = np.stack([wt, tc, et], axis=0).astype(np.float32)
-            return {
-                "case": case,
-                "image": torch.from_numpy(image).float(),
-                "target": torch.from_numpy(target).float(),
-            }
+            try:
+                imgs = []
+                for mod in self.modalities:
+                    f = case_dir / f"{case}-{mod}.nii.gz"
+                    if not f.exists():
+                        raise FileNotFoundError(f"Missing modality file: {f}")
+                    x = self._load_nii(f)
+                    x = self._normalize(x)
+                    x = self._center_crop_or_pad(x, self.patch_size)
+                    imgs.append(x)
+                image = np.stack(imgs, axis=0)
+                seg_f = case_dir / f"{case}-seg.nii.gz"
+                if not seg_f.exists():
+                    raise FileNotFoundError(f"Missing segmentation file: {seg_f}")
+                seg = self._load_nii(seg_f).astype(np.int64)
+                seg = self._center_crop_or_pad(seg, self.patch_size)
+                wt = (seg > 0).astype(np.float32)
+                tc = np.logical_or(seg == 1, seg == 3).astype(np.float32)
+                et = (seg == 3).astype(np.float32)
+                target = np.stack([wt, tc, et], axis=0).astype(np.float32)
+                return {
+                    "case": case,
+                    "image": torch.from_numpy(image).float(),
+                    "target": torch.from_numpy(target).float(),
+                }
+            except Exception as e:
+                print(f"WARNING: skipping case {case}: {e}")
+                return None
 
 
     def load_nnunet_model(nnunet_results_dir, device):
@@ -337,10 +385,12 @@ data:
         train_loader = DataLoader(
             train_ds, batch_size=args.batch_size, shuffle=True,
             num_workers=args.num_workers, pin_memory=True,
+            collate_fn=collate_skip_none,
         )
         val_loader = DataLoader(
             val_ds, batch_size=1, shuffle=False,
             num_workers=args.num_workers, pin_memory=True,
+            collate_fn=collate_skip_none,
         )
 
         proto_params = list(prototype_block.parameters())
@@ -356,6 +406,9 @@ data:
             weight_decay=args.weight_decay,
         )
         criterion = nn.BCEWithLogitsLoss()
+        use_amp = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 7
+        print(f"GPU: {torch.cuda.get_device_name()} | SM: {torch.cuda.get_device_capability()} | AMP: {use_amp}")
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
         out_dir = Path(args.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -371,13 +424,17 @@ data:
             train_losses = []
 
             for batch in train_loader:
+                if batch is None:
+                    continue
                 image = batch["image"].to(device)
                 target = batch["target"].to(device)
                 optimizer.zero_grad(set_to_none=True)
-                logits = model(image)
-                loss = criterion(logits, target)
-                loss.backward()
-                optimizer.step()
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    logits = model(image)
+                    loss = criterion(logits, target)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 train_losses.append(loss.item())
 
             avg_train_loss = float(np.mean(train_losses))
@@ -388,9 +445,12 @@ data:
 
             with torch.no_grad():
                 for batch in val_loader:
+                    if batch is None:
+                        continue
                     image = batch["image"].to(device)
                     target = batch["target"].to(device)
-                    logits = model(image)
+                    with torch.cuda.amp.autocast(enabled=use_amp):
+                        logits = model(image)
                     val_dices.append(compute_region_dice(logits[0], target[0]))
 
             wt = float(np.mean([d["WT"] for d in val_dices]))
@@ -527,6 +587,7 @@ data:
             if p.is_dir() and p.name.startswith("BraTS-")
         ])
         print("Total cases found:", len(case_names))
+        case_names = validate_cases(case_names, args.data_dir)
 
         split_json = output_dir / "prototype_5fold_split.json"
         if split_json.exists():
@@ -534,6 +595,11 @@ data:
                 split = json.load(f)
         else:
             split = create_5fold_split(case_names, split_json, seed=args.seed)
+
+        valid_set = set(case_names)
+        for fk in split:
+            split[fk]["train"] = [c for c in split[fk]["train"] if c in valid_set]
+            split[fk]["val"]   = [c for c in split[fk]["val"]   if c in valid_set]
 
         for fold in range(5):
             print(f"Fold {fold}: train={len(split[str(fold)]['train'])}, val={len(split[str(fold)]['val'])}")
@@ -556,7 +622,7 @@ metadata:
   name: prototype-nnunet-fold0
   namespace: gai-lina-group
 spec:
-  backoffLimit: 1
+  backoffLimit: 3
   template:
     spec:
       restartPolicy: Never
@@ -622,7 +688,7 @@ metadata:
   name: prototype-nnunet-fold1
   namespace: gai-lina-group
 spec:
-  backoffLimit: 1
+  backoffLimit: 3
   template:
     spec:
       restartPolicy: Never
@@ -688,7 +754,7 @@ metadata:
   name: prototype-nnunet-fold2
   namespace: gai-lina-group
 spec:
-  backoffLimit: 1
+  backoffLimit: 3
   template:
     spec:
       restartPolicy: Never
@@ -754,7 +820,7 @@ metadata:
   name: prototype-nnunet-fold3
   namespace: gai-lina-group
 spec:
-  backoffLimit: 1
+  backoffLimit: 3
   template:
     spec:
       restartPolicy: Never
@@ -820,7 +886,7 @@ metadata:
   name: prototype-nnunet-fold4
   namespace: gai-lina-group
 spec:
-  backoffLimit: 1
+  backoffLimit: 3
   template:
     spec:
       restartPolicy: Never
