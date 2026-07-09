@@ -1,25 +1,25 @@
-# nautilius/jobs/evaluate-ensemble.yaml
+# nautilius/jobs/evaluate-baseline-ensemble.yaml
 #
-# 5-fold ensemble evaluation of prototype-guided nnUNet.
-# Loads all 5 best checkpoints, runs every val case through all 5 models,
+# 5-fold ensemble evaluation of baseline nnUNet (no prototype).
+# Loads all 5 best checkpoints, runs every case through all 5 models,
 # averages soft probabilities, and computes WT/TC/ET Dice.
 #
 # Outputs:
-#   /pvc/outputs/prototype_nnunet_5fold/prototype_ensemble_per_case.csv
-#   /pvc/outputs/prototype_nnunet_5fold/prototype_ensemble_summary.csv
+#   /pvc/outputs/baseline_nnunet_5fold/baseline_ensemble_per_case.csv
+#   /pvc/outputs/baseline_nnunet_5fold/baseline_ensemble_summary.csv
 #
-# Deploy : kubectl apply -f nautilius/jobs/evaluate-ensemble.yaml -n gai-lina-group
-# Monitor: kubectl logs -f job/prototype-nnunet-ensemble-eval -n gai-lina-group
-# Delete : kubectl delete -f nautilius/jobs/evaluate-ensemble.yaml -n gai-lina-group
+# Deploy : kubectl apply -f nautilius/jobs/evaluate-baseline-ensemble.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/baseline-nnunet-ensemble-eval -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/evaluate-baseline-ensemble.yaml -n gai-lina-group
 
 # ── ConfigMap: ensemble evaluation script ────────────────────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: prototype-ensemble-eval-script
+  name: baseline-ensemble-eval-script
   namespace: gai-lina-group
 data:
-  evaluate_ensemble.py: |
+  evaluate_baseline_ensemble.py: |
     import os
     import json
     import argparse
@@ -29,76 +29,7 @@ data:
     import nibabel as nib
     import torch
     import torch.nn as nn
-    import torch.nn.functional as F
     from torch.utils.data import Dataset, DataLoader
-
-
-    class PrototypeMemory3D(nn.Module):
-        def __init__(self, feature_dim=320, num_classes=4, prototypes_per_class=8):
-            super().__init__()
-            self.feature_dim = feature_dim
-            self.num_classes = num_classes
-            self.prototypes_per_class = prototypes_per_class
-            self.total_prototypes = num_classes * prototypes_per_class
-            self.prototypes = nn.Parameter(
-                torch.randn(num_classes, prototypes_per_class, feature_dim) * 0.02
-            )
-
-        def forward(self, x):
-            B, C, D, H, W = x.shape
-            x_flat = x.permute(0, 2, 3, 4, 1).reshape(B, D * H * W, C)
-            x_norm = F.normalize(x_flat, dim=-1)
-            proto_flat = self.prototypes.reshape(self.total_prototypes, C)
-            proto_norm = F.normalize(proto_flat, dim=-1)
-            sim = torch.matmul(x_norm, proto_norm.t())
-            sim = sim.reshape(B, D, H, W, self.num_classes, self.prototypes_per_class)
-            sim = sim.permute(0, 4, 5, 1, 2, 3).contiguous()
-            class_evidence = sim.max(dim=2).values
-            top_proto_indices = sim.reshape(B, self.total_prototypes, D, H, W).argmax(dim=1)
-            return {
-                "proto_similarity": sim,
-                "class_evidence": class_evidence,
-                "top_proto_indices": top_proto_indices,
-                "prototypes": self.prototypes,
-            }
-
-
-    class PrototypeCrossAttention3D(nn.Module):
-        def __init__(self, feature_dim=320, num_heads=4):
-            super().__init__()
-            self.attn = nn.MultiheadAttention(
-                embed_dim=feature_dim, num_heads=num_heads, batch_first=True
-            )
-            self.norm = nn.LayerNorm(feature_dim)
-
-        def forward(self, x, prototypes):
-            B, C, D, H, W = x.shape
-            x_tokens = x.permute(0, 2, 3, 4, 1).reshape(B, D * H * W, C)
-            proto_tokens = prototypes.reshape(1, -1, C).repeat(B, 1, 1)
-            attended, _ = self.attn(
-                query=x_tokens, key=proto_tokens, value=proto_tokens, need_weights=False
-            )
-            out = self.norm(x_tokens + attended)
-            return out.reshape(B, D, H, W, C).permute(0, 4, 1, 2, 3).contiguous()
-
-
-    class PrototypeFusionBlock3D(nn.Module):
-        def __init__(self, feature_dim=320, num_classes=4, prototypes_per_class=8, num_heads=4):
-            super().__init__()
-            self.memory = PrototypeMemory3D(feature_dim, num_classes, prototypes_per_class)
-            self.cross_attention = PrototypeCrossAttention3D(feature_dim, num_heads)
-            self.gate = nn.Sequential(
-                nn.Conv3d(feature_dim * 2, feature_dim, kernel_size=1),
-                nn.Sigmoid(),
-            )
-            self.out_norm = nn.InstanceNorm3d(feature_dim, affine=True)
-
-        def forward(self, x):
-            mem_out = self.memory(x)
-            proto_features = self.cross_attention(x, mem_out["prototypes"])
-            gate = self.gate(torch.cat([x, proto_features], dim=1))
-            x_fused = gate * proto_features + (1.0 - gate) * x
-            return {"x_fused": self.out_norm(x_fused)}
 
 
     class BraTSInferenceDataset(Dataset):
@@ -198,22 +129,8 @@ data:
         model = predictor.network.to(device)
         model.encoder.stages[5].load_state_dict(ckpt["encoder_stage_5_state_dict"])
         model.decoder.load_state_dict(ckpt["decoder_state_dict"])
-
-        prototype_block = PrototypeFusionBlock3D(
-            feature_dim=ckpt.get("feature_dim", 320),
-            num_classes=ckpt.get("num_classes", 4),
-            prototypes_per_class=ckpt.get("prototypes_per_class", 8),
-        ).to(device)
-        prototype_block.load_state_dict(ckpt["prototype_block_state_dict"])
-
-        def prototype_hook(module, inputs, output):
-            return prototype_block(output)["x_fused"]
-
-        hook_handle = model.encoder.stages[5].register_forward_hook(prototype_hook)
         model.eval()
-        prototype_block.eval()
-
-        return model, prototype_block, hook_handle
+        return model
 
 
     def dice_score(pred, target, eps=1e-6):
@@ -225,7 +142,8 @@ data:
 
     def main():
         parser = argparse.ArgumentParser()
-        parser.add_argument("--checkpoint_dir", required=True)
+        parser.add_argument("--checkpoint_dir", required=True,
+                            help="Dir containing baseline_fold{N}_best.pth")
         parser.add_argument("--data_dir", required=True)
         parser.add_argument("--nnunet_results", required=True)
         parser.add_argument("--output_dir", required=True)
@@ -252,18 +170,20 @@ data:
             print(f"Cases to evaluate (from split JSON val sets): {len(all_cases)}")
         else:
             data_dir = Path(args.data_dir)
-            all_cases = sorted([p.name for p in data_dir.iterdir() if p.is_dir() and p.name.startswith("BraTS-")])
+            all_cases = sorted([
+                p.name for p in data_dir.iterdir()
+                if p.is_dir() and p.name.startswith("BraTS-")
+            ])
             print(f"Cases to evaluate (all in {args.data_dir}): {len(all_cases)}")
 
         checkpoint_dir = Path(args.checkpoint_dir)
         fold_models = []
         for i in range(5):
-            cp = checkpoint_dir / f"prototype_fold{i}_best.pth"
+            cp = checkpoint_dir / f"baseline_fold{i}_best.pth"
             if not cp.exists():
                 raise FileNotFoundError(f"Missing checkpoint: {cp}")
             print(f"Loading fold {i} checkpoint...")
-            model, proto_block, hook_handle = load_fold_model(cp, args.nnunet_results, device)
-            fold_models.append((model, proto_block, hook_handle))
+            fold_models.append(load_fold_model(cp, args.nnunet_results, device))
         print(f"All {len(fold_models)} models loaded.\n")
 
         dataset = BraTSInferenceDataset(all_cases, args.data_dir)
@@ -286,7 +206,7 @@ data:
             target = batch["target"][0]
 
             ensemble_probs = None
-            for model, _, _ in fold_models:
+            for model in fold_models:
                 with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_amp):
                     logits = model(image)
                 probs = torch.sigmoid(logits[0]).cpu()
@@ -307,10 +227,7 @@ data:
                 print(f"[{batch_idx+1}/{n_total}] {case}: "
                       f"WT={wt:.4f} TC={tc:.4f} ET={et:.4f} Mean={mean_d:.4f}")
 
-        for _, _, hook_handle in fold_models:
-            hook_handle.remove()
-
-        per_case_csv = out_dir / "prototype_ensemble_per_case.csv"
+        per_case_csv = out_dir / "baseline_ensemble_per_case.csv"
         with open(per_case_csv, "w") as f:
             f.write("case,WT_Dice,TC_Dice,ET_Dice,Mean_Dice\n")
             for r in per_case_rows:
@@ -323,7 +240,7 @@ data:
         et_arr = np.array([r["ET_Dice"] for r in per_case_rows])
         md_arr = np.array([r["Mean_Dice"] for r in per_case_rows])
 
-        summary_csv = out_dir / "prototype_ensemble_summary.csv"
+        summary_csv = out_dir / "baseline_ensemble_summary.csv"
         with open(summary_csv, "w") as f:
             f.write("metric,mean,std\n")
             f.write(f"WT_Dice,{wt_arr.mean():.6f},{wt_arr.std(ddof=1):.6f}\n")
@@ -332,7 +249,7 @@ data:
             f.write(f"Mean_Dice,{md_arr.mean():.6f},{md_arr.std(ddof=1):.6f}\n")
 
         print(f"\n{'='*50}")
-        print(f"5-Fold Ensemble Results (n={len(per_case_rows)})")
+        print(f"Baseline 5-Fold Ensemble Results (n={len(per_case_rows)})")
         print(f"{'='*50}")
         print(f"WT   Dice: {wt_arr.mean():.4f} +/- {wt_arr.std(ddof=1):.4f}")
         print(f"TC   Dice: {tc_arr.mean():.4f} +/- {tc_arr.std(ddof=1):.4f}")
@@ -349,7 +266,7 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: prototype-nnunet-ensemble-eval
+  name: baseline-nnunet-ensemble-eval
   namespace: gai-lina-group
 spec:
   backoffLimit: 1
@@ -366,12 +283,13 @@ spec:
         - name: evaluator
           image: ghcr.io/kagozi/brats23-nnunet:latest
           imagePullPolicy: Always
-          command: ["python", "/scripts/evaluate_ensemble.py"]
+          command: ["python", "/scripts/evaluate_baseline_ensemble.py"]
           args:
-            - "--checkpoint_dir=/pvc/outputs/prototype_nnunet_5fold"
-            - "--data_dir=/pvc/data/brats23/test"
+            - "--checkpoint_dir=/pvc/outputs/baseline_nnunet_5fold"
+            - "--data_dir=/pvc/data/brats23/train"
             - "--nnunet_results=/pvc/nnunet/results"
-            - "--output_dir=/pvc/outputs/prototype_nnunet_5fold"
+            - "--output_dir=/pvc/outputs/baseline_nnunet_5fold"
+            - "--split_json=/pvc/outputs/baseline_nnunet_5fold/baseline_5fold_split.json"
             - "--num_workers=2"
           env:
             - name: PYTHONUNBUFFERED
@@ -408,4 +326,4 @@ spec:
             sizeLimit: 8Gi
         - name: script-vol
           configMap:
-            name: prototype-ensemble-eval-script
+            name: baseline-ensemble-eval-script

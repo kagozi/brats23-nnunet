@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""
+5-fold ensemble evaluation of baseline nnUNet (no prototype).
+
+Loads all 5 best checkpoints, runs each case through all 5 models,
+averages soft probabilities (soft voting), then thresholds at 0.5 to
+compute WT/TC/ET Dice.
+"""
+import os
+import json
+import argparse
+from pathlib import Path
+
+import numpy as np
+import nibabel as nib
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+
+
+class BraTSInferenceDataset(Dataset):
+    def __init__(self, case_names, data_dir, patch_size=(128, 128, 128)):
+        self.case_names = case_names
+        self.data_dir = Path(data_dir)
+        self.patch_size = patch_size
+        self.modalities = ["t1n", "t1c", "t2w", "t2f"]
+
+    def __len__(self):
+        return len(self.case_names)
+
+    def _load_nii(self, path):
+        return nib.load(str(path)).get_fdata().astype(np.float32)
+
+    def _normalize(self, x):
+        mask = x != 0
+        if mask.sum() > 0:
+            mean = x[mask].mean()
+            std = x[mask].std()
+            x = (x - mean) / (std + 1e-8)
+        return x
+
+    def _center_crop_or_pad(self, arr, target_shape):
+        out = np.zeros(target_shape, dtype=arr.dtype)
+        src_slices, dst_slices = [], []
+        for dim, tgt in enumerate(target_shape):
+            size = arr.shape[dim]
+            if size >= tgt:
+                start = (size - tgt) // 2
+                src_slices.append(slice(start, start + tgt))
+                dst_slices.append(slice(0, tgt))
+            else:
+                start = (tgt - size) // 2
+                src_slices.append(slice(0, size))
+                dst_slices.append(slice(start, start + size))
+        out[tuple(dst_slices)] = arr[tuple(src_slices)]
+        return out
+
+    def __getitem__(self, idx):
+        case = self.case_names[idx]
+        case_dir = self.data_dir / case
+        try:
+            imgs = []
+            for mod in self.modalities:
+                f = case_dir / f"{case}-{mod}.nii.gz"
+                if not f.exists():
+                    raise FileNotFoundError(f"Missing: {f}")
+                x = self._normalize(self._load_nii(f))
+                x = self._center_crop_or_pad(x, self.patch_size)
+                imgs.append(x)
+            image = np.stack(imgs, axis=0)
+
+            seg_f = case_dir / f"{case}-seg.nii.gz"
+            if not seg_f.exists():
+                raise FileNotFoundError(f"Missing seg: {seg_f}")
+            seg = self._load_nii(seg_f).astype(np.int64)
+            seg = self._center_crop_or_pad(seg, self.patch_size)
+            wt = (seg > 0).astype(np.float32)
+            tc = np.logical_or(seg == 1, seg == 3).astype(np.float32)
+            et = (seg == 3).astype(np.float32)
+            target = np.stack([wt, tc, et], axis=0).astype(np.float32)
+
+            return {
+                "case": case,
+                "image": torch.from_numpy(image).float(),
+                "target": torch.from_numpy(target).float(),
+            }
+        except Exception as e:
+            print(f"WARNING: skipping {case}: {e}")
+            return None
+
+
+def collate_skip_none(batch):
+    batch = [b for b in batch if b is not None]
+    return torch.utils.data.dataloader.default_collate(batch) if batch else None
+
+
+def load_fold_model(checkpoint_path, nnunet_results_dir, device):
+    from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+
+    ckpt = torch.load(checkpoint_path, map_location=device)
+
+    predictor = nnUNetPredictor(
+        tile_step_size=0.5, use_gaussian=True, use_mirroring=False,
+        perform_everything_on_device=True, device=device,
+        verbose=False, verbose_preprocessing=False, allow_tqdm=False,
+    )
+    model_folder = (
+        Path(nnunet_results_dir)
+        / "Dataset137_BraTS2021"
+        / "nnUNetTrainer__nnUNetPlans__3d_fullres"
+    )
+    predictor.initialize_from_trained_model_folder(
+        str(model_folder), use_folds=(5,), checkpoint_name="checkpoint_final.pth"
+    )
+    model = predictor.network.to(device)
+    model.encoder.stages[5].load_state_dict(ckpt["encoder_stage_5_state_dict"])
+    model.decoder.load_state_dict(ckpt["decoder_state_dict"])
+    model.eval()
+    return model
+
+
+def dice_score(pred, target, eps=1e-6):
+    pred, target = pred.float(), target.float()
+    intersection = (pred * target).sum(dim=(1, 2, 3))
+    denominator = pred.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3))
+    return (2 * intersection + eps) / (denominator + eps)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint_dir", required=True,
+                        help="Dir containing baseline_fold{N}_best.pth")
+    parser.add_argument("--data_dir", required=True,
+                        help="Root dir of BraTS cases (containing BraTS-*/)")
+    parser.add_argument("--nnunet_results", required=True)
+    parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--split_json", default=None,
+                        help="If set, evaluate only val cases from this 5-fold split JSON")
+    parser.add_argument("--num_workers", type=int, default=2)
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name()}")
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    os.environ["nnUNet_results"] = args.nnunet_results
+    os.environ.setdefault("nnUNet_raw", str(out_dir / "nnunet_raw"))
+    os.environ.setdefault("nnUNet_preprocessed", str(out_dir / "nnunet_preprocessed"))
+
+    if args.split_json:
+        with open(args.split_json) as f:
+            split = json.load(f)
+        all_cases = sorted({c for fd in split.values() for c in fd["val"]})
+        print(f"Cases to evaluate (from split JSON val sets): {len(all_cases)}")
+    else:
+        data_dir = Path(args.data_dir)
+        all_cases = sorted([
+            p.name for p in data_dir.iterdir()
+            if p.is_dir() and p.name.startswith("BraTS-")
+        ])
+        print(f"Cases to evaluate (all in {args.data_dir}): {len(all_cases)}")
+
+    checkpoint_dir = Path(args.checkpoint_dir)
+    fold_models = []
+    for i in range(5):
+        cp = checkpoint_dir / f"baseline_fold{i}_best.pth"
+        if not cp.exists():
+            raise FileNotFoundError(f"Missing checkpoint: {cp}")
+        print(f"Loading fold {i} checkpoint...")
+        fold_models.append(load_fold_model(cp, args.nnunet_results, device))
+    print(f"All {len(fold_models)} models loaded.\n")
+
+    dataset = BraTSInferenceDataset(all_cases, args.data_dir)
+    loader = DataLoader(
+        dataset, batch_size=1, shuffle=False,
+        num_workers=args.num_workers, pin_memory=True,
+        collate_fn=collate_skip_none,
+    )
+
+    use_amp = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 7
+    per_case_rows = []
+    n_total = len(all_cases)
+
+    for batch_idx, batch in enumerate(loader):
+        if batch is None:
+            continue
+
+        case = batch["case"][0]
+        image = batch["image"].to(device)
+        target = batch["target"][0]
+
+        ensemble_probs = None
+        for model in fold_models:
+            with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_amp):
+                logits = model(image)
+            probs = torch.sigmoid(logits[0]).cpu()
+            ensemble_probs = probs if ensemble_probs is None else ensemble_probs + probs
+
+        avg_probs = ensemble_probs / len(fold_models)
+        pred = (avg_probs > 0.5).float()
+
+        dices = dice_score(pred.unsqueeze(0), target.unsqueeze(0)).squeeze(0)
+        wt, tc, et = dices[0].item(), dices[1].item(), dices[2].item()
+        mean_d = dices.mean().item()
+
+        per_case_rows.append({
+            "case": case, "WT_Dice": wt, "TC_Dice": tc, "ET_Dice": et, "Mean_Dice": mean_d,
+        })
+
+        if (batch_idx + 1) % 100 == 0 or (batch_idx + 1) == n_total:
+            print(f"[{batch_idx+1}/{n_total}] {case}: "
+                  f"WT={wt:.4f} TC={tc:.4f} ET={et:.4f} Mean={mean_d:.4f}")
+
+    per_case_csv = out_dir / "baseline_ensemble_per_case.csv"
+    with open(per_case_csv, "w") as f:
+        f.write("case,WT_Dice,TC_Dice,ET_Dice,Mean_Dice\n")
+        for r in per_case_rows:
+            f.write(f"{r['case']},{r['WT_Dice']:.6f},{r['TC_Dice']:.6f},"
+                    f"{r['ET_Dice']:.6f},{r['Mean_Dice']:.6f}\n")
+    print(f"\nSaved per-case results: {per_case_csv}")
+
+    wt_arr = np.array([r["WT_Dice"] for r in per_case_rows])
+    tc_arr = np.array([r["TC_Dice"] for r in per_case_rows])
+    et_arr = np.array([r["ET_Dice"] for r in per_case_rows])
+    md_arr = np.array([r["Mean_Dice"] for r in per_case_rows])
+
+    summary_csv = out_dir / "baseline_ensemble_summary.csv"
+    with open(summary_csv, "w") as f:
+        f.write("metric,mean,std\n")
+        f.write(f"WT_Dice,{wt_arr.mean():.6f},{wt_arr.std(ddof=1):.6f}\n")
+        f.write(f"TC_Dice,{tc_arr.mean():.6f},{tc_arr.std(ddof=1):.6f}\n")
+        f.write(f"ET_Dice,{et_arr.mean():.6f},{et_arr.std(ddof=1):.6f}\n")
+        f.write(f"Mean_Dice,{md_arr.mean():.6f},{md_arr.std(ddof=1):.6f}\n")
+
+    print(f"\n{'='*50}")
+    print(f"Baseline 5-Fold Ensemble Results (n={len(per_case_rows)})")
+    print(f"{'='*50}")
+    print(f"WT   Dice: {wt_arr.mean():.4f} +/- {wt_arr.std(ddof=1):.4f}")
+    print(f"TC   Dice: {tc_arr.mean():.4f} +/- {tc_arr.std(ddof=1):.4f}")
+    print(f"ET   Dice: {et_arr.mean():.4f} +/- {et_arr.std(ddof=1):.4f}")
+    print(f"Mean Dice: {md_arr.mean():.4f} +/- {md_arr.std(ddof=1):.4f}")
+    print(f"\nSaved summary: {summary_csv}")
+
+
+if __name__ == "__main__":
+    main()

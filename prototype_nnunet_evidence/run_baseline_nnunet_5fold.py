@@ -1,0 +1,435 @@
+import os
+import json
+import argparse
+import random
+from pathlib import Path
+
+import numpy as np
+import nibabel as nib
+
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+
+
+def seed_everything(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False
+
+
+def validate_cases(case_names, data_dir):
+    modalities = ["t1n", "t1c", "t2w", "t2f"]
+    valid, skipped = [], []
+    for case in case_names:
+        case_dir = Path(data_dir) / case
+        ok = True
+        for mod in modalities:
+            f = case_dir / f"{case}-{mod}.nii.gz"
+            if not f.exists():
+                ok = False
+                break
+            try:
+                nib.load(str(f)).header
+            except Exception:
+                ok = False
+                break
+        if ok:
+            seg_f = case_dir / f"{case}-seg.nii.gz"
+            if not seg_f.exists():
+                ok = False
+            else:
+                try:
+                    nib.load(str(seg_f)).header
+                except Exception:
+                    ok = False
+        if ok:
+            valid.append(case)
+        else:
+            skipped.append(case)
+    if skipped:
+        print(f"Skipping {len(skipped)} invalid/corrupted cases: {skipped}")
+    print(f"Valid cases after validation: {len(valid)} / {len(case_names)}")
+    return valid
+
+
+def create_5fold_split(case_names, out_json, seed=42):
+    case_names = sorted(case_names)
+    random.seed(seed)
+    random.shuffle(case_names)
+    folds = {str(i): [] for i in range(5)}
+    for i, case in enumerate(case_names):
+        folds[str(i % 5)].append(case)
+    split = {}
+    for fold in range(5):
+        val_cases = folds[str(fold)]
+        train_cases = []
+        for other_fold in range(5):
+            if other_fold != fold:
+                train_cases.extend(folds[str(other_fold)])
+        split[str(fold)] = {
+            "train": sorted(train_cases),
+            "val": sorted(val_cases),
+        }
+    with open(out_json, "w") as f:
+        json.dump(split, f, indent=2)
+    return split
+
+
+def dice_score(pred, target, eps=1e-6):
+    pred = pred.float()
+    target = target.float()
+    intersection = (pred * target).sum(dim=(1, 2, 3))
+    denominator = pred.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3))
+    return (2 * intersection + eps) / (denominator + eps)
+
+
+def compute_region_dice(logits, target):
+    probs = torch.sigmoid(logits)
+    pred = (probs > 0.5).float()
+    dices = dice_score(pred, target)
+    return {
+        "WT": dices[0].item(),
+        "TC": dices[1].item(),
+        "ET": dices[2].item(),
+        "Mean": dices.mean().item(),
+    }
+
+
+def collate_skip_none(batch):
+    batch = [b for b in batch if b is not None]
+    return torch.utils.data.dataloader.default_collate(batch) if batch else None
+
+
+class BraTSPatchDataset(Dataset):
+    def __init__(self, case_names, data_dir, patch_size=(128, 128, 128)):
+        self.case_names = case_names
+        self.data_dir = Path(data_dir)
+        self.patch_size = patch_size
+        self.modalities = ["t1n", "t1c", "t2w", "t2f"]
+
+    def __len__(self):
+        return len(self.case_names)
+
+    def _load_nii(self, path):
+        return nib.load(str(path)).get_fdata().astype(np.float32)
+
+    def _normalize(self, x):
+        mask = x != 0
+        if mask.sum() > 0:
+            mean = x[mask].mean()
+            std = x[mask].std()
+            x = (x - mean) / (std + 1e-8)
+        return x
+
+    def _center_crop_or_pad(self, arr, target_shape):
+        out = np.zeros(target_shape, dtype=arr.dtype)
+        src_slices, dst_slices = [], []
+        for dim, target in enumerate(target_shape):
+            size = arr.shape[dim]
+            if size >= target:
+                start = (size - target) // 2
+                src_slices.append(slice(start, start + target))
+                dst_slices.append(slice(0, target))
+            else:
+                start = (target - size) // 2
+                src_slices.append(slice(0, size))
+                dst_slices.append(slice(start, start + size))
+        out[tuple(dst_slices)] = arr[tuple(src_slices)]
+        return out
+
+    def __getitem__(self, idx):
+        case = self.case_names[idx]
+        case_dir = self.data_dir / case
+        try:
+            imgs = []
+            for mod in self.modalities:
+                f = case_dir / f"{case}-{mod}.nii.gz"
+                if not f.exists():
+                    raise FileNotFoundError(f"Missing modality file: {f}")
+                x = self._load_nii(f)
+                x = self._normalize(x)
+                x = self._center_crop_or_pad(x, self.patch_size)
+                imgs.append(x)
+            image = np.stack(imgs, axis=0)
+            seg_f = case_dir / f"{case}-seg.nii.gz"
+            if not seg_f.exists():
+                raise FileNotFoundError(f"Missing segmentation file: {seg_f}")
+            seg = self._load_nii(seg_f).astype(np.int64)
+            seg = self._center_crop_or_pad(seg, self.patch_size)
+            wt = (seg > 0).astype(np.float32)
+            tc = np.logical_or(seg == 1, seg == 3).astype(np.float32)
+            et = (seg == 3).astype(np.float32)
+            target = np.stack([wt, tc, et], axis=0).astype(np.float32)
+            return {
+                "case": case,
+                "image": torch.from_numpy(image).float(),
+                "target": torch.from_numpy(target).float(),
+            }
+        except Exception as e:
+            print(f"WARNING: skipping case {case}: {e}")
+            return None
+
+
+def load_nnunet_model(nnunet_results_dir, device):
+    from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+    predictor = nnUNetPredictor(
+        tile_step_size=0.5,
+        use_gaussian=True,
+        use_mirroring=False,
+        perform_everything_on_device=True,
+        device=device,
+        verbose=False,
+        verbose_preprocessing=False,
+        allow_tqdm=False,
+    )
+    model_folder = (
+        Path(nnunet_results_dir)
+        / "Dataset137_BraTS2021"
+        / "nnUNetTrainer__nnUNetPlans__3d_fullres"
+    )
+    predictor.initialize_from_trained_model_folder(
+        str(model_folder),
+        use_folds=(5,),
+        checkpoint_name="checkpoint_final.pth",
+    )
+    return predictor.network.to(device)
+
+
+def train_one_fold(args, fold, split, device):
+    print("=" * 80)
+    print(f"Training fold {fold}")
+    print("=" * 80)
+
+    train_cases = split[str(fold)]["train"]
+    val_cases = split[str(fold)]["val"]
+    print("Train cases:", len(train_cases))
+    print("Val cases:", len(val_cases))
+
+    model = load_nnunet_model(args.nnunet_results, device)
+    model.train()
+
+    for p in model.parameters():
+        p.requires_grad = False
+    for p in model.encoder.stages[5].parameters():
+        p.requires_grad = True
+    for p in model.decoder.parameters():
+        p.requires_grad = True
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    print("Trainable nnU-Net params:", sum(p.numel() for p in trainable_params))
+
+    train_ds = BraTSPatchDataset(train_cases, args.data_dir)
+    val_ds = BraTSPatchDataset(val_cases, args.data_dir)
+
+    train_loader = DataLoader(
+        train_ds, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, pin_memory=True,
+        collate_fn=collate_skip_none,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=1, shuffle=False,
+        num_workers=args.num_workers, pin_memory=True,
+        collate_fn=collate_skip_none,
+    )
+
+    optimizer = torch.optim.AdamW(
+        trainable_params,
+        lr=args.nnunet_lr,
+        weight_decay=args.weight_decay,
+    )
+    criterion = nn.BCEWithLogitsLoss()
+
+    use_amp = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 7
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name()} | SM: {torch.cuda.get_device_capability()} | AMP: {use_amp}")
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = out_dir / f"baseline_fold{fold}_best.pth"
+    results_csv = out_dir / f"baseline_fold{fold}_results.csv"
+
+    best_val_mean = -1.0
+    rows = []
+
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        train_losses = []
+
+        for batch in train_loader:
+            if batch is None:
+                continue
+            image = batch["image"].to(device)
+            target = batch["target"].to(device)
+            optimizer.zero_grad(set_to_none=True)
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                logits = model(image)
+                loss = criterion(logits, target)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            train_losses.append(loss.item())
+
+        avg_train_loss = float(np.mean(train_losses))
+
+        model.eval()
+        val_dices = []
+        with torch.no_grad():
+            for batch in val_loader:
+                if batch is None:
+                    continue
+                image = batch["image"].to(device)
+                target = batch["target"].to(device)
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    logits = model(image)
+                val_dices.append(compute_region_dice(logits[0], target[0]))
+
+        wt = float(np.mean([d["WT"] for d in val_dices]))
+        tc = float(np.mean([d["TC"] for d in val_dices]))
+        et = float(np.mean([d["ET"] for d in val_dices]))
+        mean_dice = float(np.mean([d["Mean"] for d in val_dices]))
+
+        print(
+            f"Fold {fold} | Epoch {epoch:03d} | "
+            f"Loss={avg_train_loss:.4f} | "
+            f"WT={wt:.4f} | TC={tc:.4f} | ET={et:.4f} | Mean={mean_dice:.4f}"
+        )
+        rows.append([epoch, avg_train_loss, wt, tc, et, mean_dice])
+
+        if mean_dice > best_val_mean:
+            best_val_mean = mean_dice
+            torch.save(
+                {
+                    "fold": fold,
+                    "epoch": epoch,
+                    "best_val_mean": best_val_mean,
+                    "encoder_stage_5_state_dict": model.encoder.stages[5].state_dict(),
+                    "decoder_state_dict": model.decoder.state_dict(),
+                    "training": f"baseline_encoder_stage_5_plus_decoder_fold{fold}",
+                    "train_cases": train_cases,
+                    "val_cases": val_cases,
+                },
+                checkpoint_path,
+            )
+            print("Saved best checkpoint:", checkpoint_path)
+
+    with open(results_csv, "w") as f:
+        f.write("epoch,train_loss,WT_Dice,TC_Dice,ET_Dice,Mean_Dice\n")
+        for r in rows:
+            f.write(",".join(map(str, r)) + "\n")
+
+    print(f"Fold {fold} complete. Best validation mean Dice: {best_val_mean}")
+    return {
+        "fold": fold,
+        "best_val_mean": best_val_mean,
+        "checkpoint": str(checkpoint_path),
+        "results_csv": str(results_csv),
+    }
+
+
+def summarize_results(output_dir):
+    output_dir = Path(output_dir)
+    rows = []
+    for fold in range(5):
+        csv_path = output_dir / f"baseline_fold{fold}_results.csv"
+        if not csv_path.exists():
+            print("Missing CSV:", csv_path)
+            continue
+        data = np.genfromtxt(csv_path, delimiter=",", names=True)
+        best = data if data.ndim == 0 else data[np.argmax(data["Mean_Dice"])]
+        rows.append({
+            "Fold": fold,
+            "Best_Epoch": int(best["epoch"]),
+            "WT_Dice": float(best["WT_Dice"]),
+            "TC_Dice": float(best["TC_Dice"]),
+            "ET_Dice": float(best["ET_Dice"]),
+            "Mean_Dice": float(best["Mean_Dice"]),
+        })
+
+    summary_csv = output_dir / "baseline_5fold_summary.csv"
+    with open(summary_csv, "w") as f:
+        f.write("Fold,Best_Epoch,WT_Dice,TC_Dice,ET_Dice,Mean_Dice\n")
+        for r in rows:
+            f.write(f"{r['Fold']},{r['Best_Epoch']},{r['WT_Dice']},{r['TC_Dice']},{r['ET_Dice']},{r['Mean_Dice']}\n")
+
+    if rows:
+        wt = np.array([r["WT_Dice"] for r in rows])
+        tc = np.array([r["TC_Dice"] for r in rows])
+        et = np.array([r["ET_Dice"] for r in rows])
+        md = np.array([r["Mean_Dice"] for r in rows])
+        summary_txt = output_dir / "baseline_5fold_summary.txt"
+        with open(summary_txt, "w") as f:
+            f.write("Baseline nnU-Net 5-fold summary\n")
+            f.write("================================\n\n")
+            for r in rows:
+                f.write(f"Fold {r['Fold']}: WT={r['WT_Dice']:.4f}, TC={r['TC_Dice']:.4f}, ET={r['ET_Dice']:.4f}, Mean={r['Mean_Dice']:.4f}\n")
+            f.write("\nAverage across folds:\n")
+            f.write(f"WT Dice:   {wt.mean():.6f} +/- {wt.std(ddof=1):.6f}\n")
+            f.write(f"TC Dice:   {tc.mean():.6f} +/- {tc.std(ddof=1):.6f}\n")
+            f.write(f"ET Dice:   {et.mean():.6f} +/- {et.std(ddof=1):.6f}\n")
+            f.write(f"Mean Dice: {md.mean():.6f} +/- {md.std(ddof=1):.6f}\n")
+        print("Saved summary:", summary_csv)
+        print("Saved summary:", summary_txt)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--nnunet_results", type=str, required=True)
+    parser.add_argument("--output_dir", type=str, required=True)
+    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--nnunet_lr", type=float, default=1e-5)
+    parser.add_argument("--weight_decay", type=float, default=1e-5)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--fold", type=str, default="all")
+    args = parser.parse_args()
+
+    seed_everything(args.seed)
+    os.environ["nnUNet_results"] = args.nnunet_results
+    os.environ.setdefault("nnUNet_raw", str(Path(args.output_dir) / "nnunet_raw"))
+    os.environ.setdefault("nnUNet_preprocessed", str(Path(args.output_dir) / "nnunet_preprocessed"))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
+
+    data_dir = Path(args.data_dir)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    case_names = sorted([
+        p.name for p in data_dir.iterdir()
+        if p.is_dir() and p.name.startswith("BraTS-")
+    ])
+    print("Total cases found:", len(case_names))
+    case_names = validate_cases(case_names, args.data_dir)
+
+    split_json = output_dir / "baseline_5fold_split.json"
+    if split_json.exists():
+        with open(split_json) as f:
+            split = json.load(f)
+    else:
+        split = create_5fold_split(case_names, split_json, seed=args.seed)
+
+    valid_set = set(case_names)
+    for fk in split:
+        split[fk]["train"] = [c for c in split[fk]["train"] if c in valid_set]
+        split[fk]["val"] = [c for c in split[fk]["val"] if c in valid_set]
+
+    for fold in range(5):
+        print(f"Fold {fold}: train={len(split[str(fold)]['train'])}, val={len(split[str(fold)]['val'])}")
+
+    folds_to_run = list(range(5)) if args.fold == "all" else [int(args.fold)]
+    for fold in folds_to_run:
+        train_one_fold(args, fold, split, device)
+
+    summarize_results(output_dir)
+
+
+if __name__ == "__main__":
+    main()

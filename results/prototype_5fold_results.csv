@@ -7,6 +7,6 @@ Fold,Best_Epoch,WT_Dice,TC_Dice,ET_Dice,Mean_Dice
 mean,,0.9086,0.8961,0.8526,0.8858
 std,,0.0109,0.0123,0.0093,0.0096
 
-# Ensemble (5-fold soft voting, n=1042) — NOTE: optimistic, 4/5 models trained on each case
-ensemble_mean,,0.9849,0.9892,0.9891,0.9383
-ensemble_std,,0.1073,0.0826,0.0833,0.0548
+# Test set ensemble (5-fold soft voting, n=297 held-out cases)
+test_ensemble_mean,,0.9732,0.9669,0.9699,0.9071
+test_ensemble_std,,0.1546,0.1682,0.1602,0.0736
