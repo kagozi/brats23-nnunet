@@ -1,0 +1,54 @@
+# nautilius/jobs/upload-pod.yaml
+#
+# Temporary pod for uploading zip files to the PVC via kubectl cp.
+# Stays alive until you delete it.
+#
+# Usage:
+#   1. Apply:
+#        kubectl apply -f nautilius/jobs/upload-pod.yaml -n gai-lina-group
+#
+#   2. Wait for Running:
+#        kubectl wait pod/upload-pod --for=condition=Ready -n gai-lina-group --timeout=60s
+#
+#   3. Create target directory on PVC:
+#        kubectl exec -n gai-lina-group upload-pod -- mkdir -p /pvc/data/brats2026-met/zips
+#
+#   4. Copy each zip (run from your local data/ directory):
+#        kubectl cp data/MICCAI-LH-BraTS2025-MET-Challenge-TrainingData_batch1.zip \
+#            gai-lina-group/upload-pod:/pvc/data/brats2026-met/zips/
+#        kubectl cp data/MICCAI-LH-BraTS2025-MET-Challenge-ValidationData_batch1.zip \
+#            gai-lina-group/upload-pod:/pvc/data/brats2026-met/zips/
+#        kubectl cp data/MICCAI-LH-BraTS2025-MET-Challenge-corrected-labels_batch1.zip \
+#            gai-lina-group/upload-pod:/pvc/data/brats2026-met/zips/
+#
+#   5. Verify:
+#        kubectl exec -n gai-lina-group upload-pod -- ls -lh /pvc/data/brats2026-met/zips/
+#
+#   6. Tear down when done:
+#        kubectl delete -f nautilius/jobs/upload-pod.yaml -n gai-lina-group
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: upload-pod
+  namespace: gai-lina-group
+spec:
+  restartPolicy: Never
+  containers:
+    - name: uploader
+      image: busybox
+      command: ["sleep", "infinity"]
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      volumeMounts:
+        - name: pvc
+          mountPath: /pvc
+  volumes:
+    - name: pvc
+      persistentVolumeClaim:
+        claimName: brats23-pvc

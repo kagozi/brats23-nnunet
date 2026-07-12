@@ -1,0 +1,93 @@
+# nautilius/jobs/download-data-met2026.yaml
+#
+# Downloads the BraTS 2026 MET zip files directly from Synapse to PVC.
+# Runs entirely in the cluster — no local → cluster transfer needed.
+#
+# Files downloaded:
+#   syn64919665  MICCAI-LH-BraTS2025-MET-Challenge-TrainingData_batch1.zip   (31 GB)
+#   syn64919141  MICCAI-LH-BraTS2025-MET-Challenge-ValidationData_batch1.zip  (5 GB)
+#   syn65888166  MICCAI-LH-BraTS2025-MET-Challenge-corrected-labels_batch1.zip (20 KB)
+#
+# Prerequisites:
+#   kubectl create secret generic synapse-auth \
+#     --from-literal=token=<YOUR_PAT> -n gai-lina-group
+#
+# Deploy : kubectl apply  -f nautilius/jobs/download-data-met2026.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/download-data-met2026 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/download-data-met2026.yaml -n gai-lina-group
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-data-met2026
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+      containers:
+        - name: downloader
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+
+              echo "=== Installing synapseclient ==="
+              pip install --quiet synapseclient
+
+              echo "=== Logging into Synapse ==="
+              python - <<'PYEOF'
+              import os, synapseclient, synapseutils
+              from pathlib import Path
+
+              OUT = Path("/pvc/data/brats2026-met/zips")
+              OUT.mkdir(parents=True, exist_ok=True)
+
+              syn = synapseclient.Synapse()
+              syn.login(authToken=os.environ["SYNAPSE_TOKEN"], silent=True)
+              print("Logged in.")
+
+              # File SynIDs from the challenge data section
+              files = {
+                  "syn64919665": "TrainingData_batch1.zip   (31 GB)",
+                  "syn64919141": "ValidationData_batch1.zip  (5 GB)",
+                  "syn65888166": "corrected-labels_batch1.zip (20 KB)",
+              }
+
+              for syn_id, desc in files.items():
+                  print(f"\nDownloading {syn_id}  {desc} ...")
+                  entity = syn.get(syn_id, downloadLocation=str(OUT), ifcollision="overwrite.local")
+                  print(f"  Saved: {entity.path}")
+
+              print("\n=== All downloads complete ===")
+              import subprocess
+              subprocess.run(["ls", "-lh", str(OUT)], check=True)
+              PYEOF
+
+          env:
+            - name: SYNAPSE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: synapse-auth
+                  key: token
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "6Gi"
+            limits:
+              cpu: "2"
+              memory: "6Gi"
+              ephemeral-storage: "10Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
