@@ -36,11 +36,17 @@ spec:
             - |
               set -euo pipefail
 
-              echo "=== Step 1: Extract + clean labels ==="
+              echo "=== Step 1: Extract + clean labels (skip — already extracted) ==="
               python /workspace/prepare_dataset_met2026.py \
                 --zip_dir /pvc/data/brats2026-met/zips \
                 --raw_dir /pvc/data/brats2026-met \
-                --nnunet_raw /pvc/nnunet/raw
+                --nnunet_raw /pvc/nnunet/raw \
+                --skip_extract
+
+              echo ""
+              echo "=== Step 1b: Delete zip files to free PVC space ==="
+              rm -rf /pvc/data/brats2026-met/zips
+              echo "Zips deleted."
 
               echo ""
               echo "=== Step 2: Default plan + preprocess ==="
