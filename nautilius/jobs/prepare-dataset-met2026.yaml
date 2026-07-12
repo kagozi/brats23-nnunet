@@ -1,12 +1,7 @@
 # nautilius/jobs/prepare-dataset-met2026.yaml
 #
-# Extract BraTS 2026 MET zip files from the PVC, clean labels, and build
-# the nnUNet Dataset002_BraTS2026_MET directory structure.
-# Finishes with nnUNetv2_plan_and_preprocess.
-#
-# Prerequisites:
-#   - Zip files already on PVC at /pvc/data/brats2026-met/zips/ (see upload-pod.yaml)
-#   - Docker image contains prepare_dataset_met2026.py at /workspace/prepare_dataset_met2026.py
+# Plan and preprocess Dataset002_BraTS2026_MET for nnUNet training.
+# Raw data and label fixes are already in place on the PVC.
 #
 # Deploy : kubectl apply  -f nautilius/jobs/prepare-dataset-met2026.yaml -n gai-lina-group
 # Monitor: kubectl logs -f job/prepare-dataset-met2026 -n gai-lina-group
@@ -36,19 +31,6 @@ spec:
             - |
               set -euo pipefail
 
-              echo "=== Step 1: Extract + clean labels (skip — already extracted) ==="
-              python /workspace/prepare_dataset_met2026.py \
-                --zip_dir /pvc/data/brats2026-met/zips \
-                --raw_dir /pvc/data/brats2026-met \
-                --nnunet_raw /pvc/nnunet/raw \
-                --skip_extract
-
-              echo ""
-              echo "=== Step 1b: Delete zip files to free PVC space ==="
-              rm -rf /pvc/data/brats2026-met/zips
-              echo "Zips deleted."
-
-              echo ""
               echo "=== Step 2: Default plan + preprocess ==="
               nnUNetv2_plan_and_preprocess \
                 -d 002 \
