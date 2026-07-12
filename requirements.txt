@@ -3,4 +3,4 @@ nibabel
 numpy
 gdown
 SimpleITK
-mednext
+git+https://github.com/MIC-DKFZ/MedNeXt.git
