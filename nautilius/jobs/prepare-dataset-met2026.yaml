@@ -43,12 +43,18 @@ spec:
                 --nnunet_raw /pvc/nnunet/raw
 
               echo ""
-              echo "=== Step 2: Plan and preprocess ==="
+              echo "=== Step 2: Default plan + preprocess ==="
               nnUNetv2_plan_and_preprocess \
                 -d 002 \
                 --verify_dataset_integrity \
                 -np 8 \
                 -npfp 8
+
+              echo ""
+              echo "=== Step 3: ResEnc M plans (reuses preprocessed data) ==="
+              nnUNetv2_plan_experiment \
+                -d 002 \
+                -pl nnUNetPlannerResEncM
 
               echo ""
               echo "=== Done. Dataset002_BraTS2026_MET is ready for training. ==="
