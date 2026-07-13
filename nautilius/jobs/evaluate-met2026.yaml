@@ -1,0 +1,63 @@
+# nautilius/jobs/evaluate-met2026.yaml
+#
+# Evaluate BraTS 2026 MET predictions against ground truth.
+# Computes per-label DSC and NSD (1mm) for NETC, SNFH, ET, RC.
+#
+# Can evaluate any prediction directory — set PRED_DIR env var.
+# Defaults to the final post-processed ensemble predictions.
+#
+# Outputs:
+#   /pvc/nnunet/predictions/met2026/metrics.csv   (per-case + summary)
+#
+# Deploy : kubectl apply  -f nautilius/jobs/evaluate-met2026.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/evaluate-met2026 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/evaluate-met2026.yaml -n gai-lina-group
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluate-met2026
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: evaluator
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              python /workspace/evaluate_met2026.py \
+                --pred_dir ${PRED_DIR} \
+                --gt_dir   /pvc/nnunet/raw/Dataset002_BraTS2026_MET/labelsTr \
+                --out_csv  /pvc/nnunet/predictions/met2026/metrics.csv \
+                --tolerance 1.0
+          env:
+            - name: PRED_DIR
+              value: /pvc/nnunet/predictions/met2026/final
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              ephemeral-storage: "10Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc

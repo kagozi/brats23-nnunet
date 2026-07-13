@@ -1,0 +1,141 @@
+# nautilius/jobs/predict-met2026.yaml
+#
+# Run inference on the BraTS 2026 MET validation set using all three trained
+# model families (nnUNet, ResEnc, MedNeXt), ensemble their softmax outputs,
+# apply RC post-processing, and write final predictions.
+#
+# Run AFTER all training jobs are complete.
+#
+# Outputs:
+#   /pvc/nnunet/predictions/met2026/nnunet/       softmax + seg per fold-ensemble
+#   /pvc/nnunet/predictions/met2026/resenc/       softmax + seg per fold-ensemble
+#   /pvc/nnunet/predictions/met2026/mednext/      softmax + seg per fold-ensemble
+#   /pvc/nnunet/predictions/met2026/ensemble/     3-model ensemble segmentations
+#   /pvc/nnunet/predictions/met2026/final/        post-processed (RC zeroed for baseline sessions)
+#
+# Deploy : kubectl apply  -f nautilius/jobs/predict-met2026.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/predict-met2026 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/predict-met2026.yaml -n gai-lina-group
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: predict-met2026
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: PreferNoSchedule
+      containers:
+        - name: predictor
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+
+              VAL_DIR=/pvc/nnunet/raw/Dataset002_BraTS2026_MET/imagesVal
+              PRED_BASE=/pvc/nnunet/predictions/met2026
+              mkdir -p $PRED_BASE
+
+              # Install MedNeXtTrainerM_kernel3Prototype so nnUNet can find it
+              VARIANTS=$(python -c "import nnunetv2, os; print(os.path.join(os.path.dirname(nnunetv2.__file__), 'training', 'nnUNetTrainer', 'variants'))")
+              cp /workspace/nnunet_trainer_prototype.py $VARIANTS/
+
+              echo "=== 1/4  nnUNet 5-fold predict ==="
+              nnUNetv2_predict \
+                -i $VAL_DIR \
+                -o $PRED_BASE/nnunet \
+                -d 002 -c 3d_fullres \
+                -f 0 1 2 3 4 \
+                --save_probabilities \
+                -npp 2 -nps 2
+
+              echo ""
+              echo "=== 2/4  ResEnc M 5-fold predict ==="
+              nnUNetv2_predict \
+                -i $VAL_DIR \
+                -o $PRED_BASE/resenc \
+                -d 002 -c 3d_fullres \
+                -f 0 1 2 3 4 \
+                -p nnUNetResEncUNetMPlans \
+                --save_probabilities \
+                -npp 2 -nps 2
+
+              echo ""
+              echo "=== 3/4  MedNeXt-M 5-fold predict ==="
+              nnUNetv2_predict \
+                -i $VAL_DIR \
+                -o $PRED_BASE/mednext \
+                -d 002 -c 3d_fullres \
+                -f 0 1 2 3 4 \
+                -tr MedNeXtTrainerM_kernel3 \
+                --save_probabilities \
+                -npp 2 -nps 2
+
+              echo ""
+              echo "=== 4/4  Ensemble + post-process ==="
+              nnUNetv2_ensemble \
+                -i $PRED_BASE/nnunet \
+                   $PRED_BASE/resenc \
+                   $PRED_BASE/mednext \
+                -o $PRED_BASE/ensemble \
+                -np 8
+
+              python /workspace/postprocess_met2026.py \
+                --pred_dir $PRED_BASE/ensemble \
+                --out_dir  $PRED_BASE/final
+
+              echo ""
+              echo "=== Done. Final predictions at $PRED_BASE/final ==="
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "50Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 24Gi
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-A100-SXM4-80GB
+                      - NVIDIA-A100-80GB-PCIe
