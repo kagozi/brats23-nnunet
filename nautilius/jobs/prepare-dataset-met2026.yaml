@@ -31,11 +31,12 @@ spec:
             - |
               set -euo pipefail
 
-              echo "=== Step 2: Default plan + preprocess ==="
+              echo "=== Step 2: 3d_fullres preprocess only (2d already done) ==="
               nnUNetv2_plan_and_preprocess \
                 -d 002 \
-                -np 8 \
-                -npfp 8
+                -c 3d_fullres \
+                -np 4 \
+                -npfp 4
 
               echo ""
               echo "=== Step 3: ResEnc M plans (reuses preprocessed data) ==="
@@ -57,10 +58,10 @@ spec:
           resources:
             requests:
               cpu: "8"
-              memory: "32Gi"
+              memory: "64Gi"
             limits:
               cpu: "8"
-              memory: "32Gi"
+              memory: "64Gi"
               ephemeral-storage: "20Gi"
           volumeMounts:
             - name: pvc

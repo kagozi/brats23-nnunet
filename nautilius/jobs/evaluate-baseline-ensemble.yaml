@@ -286,10 +286,9 @@ spec:
           command: ["python", "/scripts/evaluate_baseline_ensemble.py"]
           args:
             - "--checkpoint_dir=/pvc/outputs/baseline_nnunet_5fold"
-            - "--data_dir=/pvc/data/brats23/train"
+            - "--data_dir=/pvc/data/brats23/test"
             - "--nnunet_results=/pvc/nnunet/results"
             - "--output_dir=/pvc/outputs/baseline_nnunet_5fold"
-            - "--split_json=/pvc/outputs/baseline_nnunet_5fold/baseline_5fold_split.json"
             - "--num_workers=2"
           env:
             - name: PYTHONUNBUFFERED

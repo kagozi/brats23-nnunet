@@ -31,10 +31,6 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: ghcr-pull-secret
-      tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: PreferNoSchedule
       containers:
         - name: trainer
           image: ghcr.io/kagozi/brats23-nnunet:latest
@@ -55,15 +51,17 @@ spec:
               value: /pvc/nnunet/results
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: nnUNet_compile
+              value: "false"
           resources:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
@@ -78,16 +76,6 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 24Gi
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 1 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -102,10 +90,6 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: ghcr-pull-secret
-      tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: PreferNoSchedule
       containers:
         - name: trainer
           image: ghcr.io/kagozi/brats23-nnunet:latest
@@ -126,15 +110,17 @@ spec:
               value: /pvc/nnunet/results
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: nnUNet_compile
+              value: "false"
           resources:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
@@ -149,16 +135,6 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 24Gi
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 2 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -173,10 +149,6 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: ghcr-pull-secret
-      tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: PreferNoSchedule
       containers:
         - name: trainer
           image: ghcr.io/kagozi/brats23-nnunet:latest
@@ -197,15 +169,17 @@ spec:
               value: /pvc/nnunet/results
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: nnUNet_compile
+              value: "false"
           resources:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
@@ -220,16 +194,6 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 24Gi
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 3 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -244,10 +208,6 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: ghcr-pull-secret
-      tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: PreferNoSchedule
       containers:
         - name: trainer
           image: ghcr.io/kagozi/brats23-nnunet:latest
@@ -268,15 +228,17 @@ spec:
               value: /pvc/nnunet/results
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: nnUNet_compile
+              value: "false"
           resources:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
@@ -291,16 +253,6 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 24Gi
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
 ---
 # ── Fold 4 ───────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -315,10 +267,6 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: ghcr-pull-secret
-      tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: PreferNoSchedule
       containers:
         - name: trainer
           image: ghcr.io/kagozi/brats23-nnunet:latest
@@ -339,15 +287,17 @@ spec:
               value: /pvc/nnunet/results
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: nnUNet_compile
+              value: "false"
           resources:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
@@ -362,13 +312,3 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 24Gi
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
