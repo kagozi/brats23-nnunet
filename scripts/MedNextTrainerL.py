@@ -9,7 +9,7 @@ class MedNextTrainerL(nnUNetTrainer):
     Requires nnunet_mednext to be installed (already in the Docker image).
     """
 
-    def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True):
+    def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True, **kwargs):
         super().__init__(plans, configuration, fold, dataset_json, unpack_dataset)
         self.initial_lr = 1e-4
         self.weight_decay = 1e-5
