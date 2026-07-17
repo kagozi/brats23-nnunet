@@ -44,7 +44,7 @@ spec:
                 -d  002 \
                 -c  3d_fullres \
                 -f  0 1 2 3 4 \
-                --step_size 0.25 \
+                -step_size 0.25 \
                 --continue_prediction \
                 -npp 1 -nps 1
 
