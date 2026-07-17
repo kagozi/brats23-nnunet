@@ -9,12 +9,8 @@ class MedNextTrainerL(nnUNetTrainer):
     Requires nnunet_mednext to be installed (already in the Docker image).
     """
 
-    def __init__(self, plans, configuration, fold, dataset_json,
-                 unpack_dataset=True, device=torch.device('cuda')):
-        super().__init__(plans, configuration, fold, dataset_json,
-                         unpack_dataset, device)
-        self.initial_lr = 1e-4
-        self.weight_decay = 1e-5
+    initial_lr = 1e-4
+    weight_decay = 1e-5
 
     @staticmethod
     def build_network_architecture(architecture_class_name, arch_init_kwargs,
