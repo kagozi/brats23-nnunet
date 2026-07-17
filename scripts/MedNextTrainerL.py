@@ -7,18 +7,19 @@ class MedNextTrainerL(nnUNetTrainer):
     nnUNetv2-compatible trainer for MedNeXt-L (kernel_size=3, do_res=True).
     Uses AdamW + poly LR, matching the original MedNeXt paper setup.
     Requires nnunet_mednext to be installed (already in the Docker image).
+
+    No __init__ override: this nnUNetv2 version introspects type(self).__init__
+    parameters and looks them up in nnUNetTrainer.__init__'s locals(), which
+    breaks for any extra params (unpack_dataset, **kwargs) we might add.
+    Instead we set our overrides in initialize(), which runs before training.
     """
 
-    def __init__(self, plans, configuration, fold, dataset_json, device=torch.device('cuda'), **kwargs):
-        # Base class signature is (plans, configuration, fold, dataset_json, device).
-        # run_training.py also passes unpack_dataset=; absorb it in **kwargs, don't forward it.
-        super().__init__(plans=plans, configuration=configuration, fold=fold,
-                         dataset_json=dataset_json, device=device)
+    def initialize(self):
         self.initial_lr = 1e-4
         self.weight_decay = 1e-5
-        # MedNeXt v1 doesn't expose the decoder.deep_supervision interface that
-        # nnUNetv2 expects, so disable DS after super().__init__ sets it True.
+        # Must be False before super().initialize() calls _build_loss().
         self.enable_deep_supervision = False
+        super().initialize()
 
     @staticmethod
     def build_network_architecture(architecture_class_name, arch_init_kwargs,
