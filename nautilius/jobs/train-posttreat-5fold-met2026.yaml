@@ -1,0 +1,355 @@
+# nautilius/jobs/train-posttreat-5fold-met2026.yaml
+#
+# Train nnUNet (standard 3d_fullres) on Dataset003_BraTS2026_MET_PostTreat.
+# All 5 folds in parallel. Uses any ≥24GB GPU node.
+#
+# This model acts as an RC specialist in the final ensemble:
+#   - Trained ONLY on post-treatment cases (RC always present)
+#   - No pre-treatment "RC=0" signal to suppress RC predictions
+#   - At inference: its RC probability channel replaces the full ensemble's RC
+#
+# Run setup-posttreat-dataset-met2026.yaml first to build Dataset003.
+#
+# Deploy : kubectl apply -f nautilius/jobs/train-posttreat-5fold-met2026.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/posttreat-met2026-fold0 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/train-posttreat-5fold-met2026.yaml -n gai-lina-group
+
+# ── Fold 0 ───────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: posttreat-met2026-fold0
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: trainer
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              nnUNetv2_train 003 3d_fullres 0 --npz
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: nnUNet_compile
+              value: "false"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
+            limits:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "50Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "23000"
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 24Gi
+---
+# ── Fold 1 ───────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: posttreat-met2026-fold1
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: trainer
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              nnUNetv2_train 003 3d_fullres 1 --npz
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: nnUNet_compile
+              value: "false"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
+            limits:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "50Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "23000"
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 24Gi
+---
+# ── Fold 2 ───────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: posttreat-met2026-fold2
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: trainer
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              nnUNetv2_train 003 3d_fullres 2 --npz
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: nnUNet_compile
+              value: "false"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
+            limits:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "50Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "23000"
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 24Gi
+---
+# ── Fold 3 ───────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: posttreat-met2026-fold3
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: trainer
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              nnUNetv2_train 003 3d_fullres 3 --npz
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: nnUNet_compile
+              value: "false"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
+            limits:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "50Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "23000"
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 24Gi
+---
+# ── Fold 4 ───────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: posttreat-met2026-fold4
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: trainer
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              nnUNetv2_train 003 3d_fullres 4 --npz
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: nnUNet_compile
+              value: "false"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
+            limits:
+              cpu: "8"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "50Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "23000"
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 24Gi

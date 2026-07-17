@@ -1,0 +1,72 @@
+# nautilius/jobs/setup-posttreat-dataset-met2026.yaml
+#
+# Builds Dataset003_BraTS2026_MET_PostTreat from Dataset002:
+#   1. Scans Dataset002/labelsTr/ to find cases with RC voxels (post-treatment)
+#   2. Creates Dataset003 with symlinks to those cases only
+#   3. Runs nnUNetv2_plan_and_preprocess -d 003
+#
+# Deploy : kubectl apply -f nautilius/jobs/setup-posttreat-dataset-met2026.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/setup-posttreat-dataset-met2026 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/setup-posttreat-dataset-met2026.yaml -n gai-lina-group
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-posttreat-dataset-met2026
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: setup
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+
+              echo "=== 1/2  Build Dataset003 (post-treatment subset) ==="
+              python /workspace/prepare_posttreat_dataset_met2026.py \
+                --dataset002 /pvc/nnunet/raw/Dataset002_BraTS2026_MET \
+                --nnunet_raw  /pvc/nnunet/raw
+
+              echo ""
+              echo "=== 2/2  Plan and preprocess Dataset003 ==="
+              nnUNetv2_plan_and_preprocess \
+                -d 003 \
+                --verify_dataset_integrity \
+                -np 4
+
+              echo ""
+              echo "=== Done. Launch train-posttreat-5fold-met2026.yaml next. ==="
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              ephemeral-storage: "0"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              ephemeral-storage: "10Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
