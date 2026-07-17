@@ -1,10 +1,12 @@
 """
 Post-processing for BraTS 2026 MET predictions.
 
-Key rule: Zero RC (label 4) for pre-treatment cases.
-Pre-treatment = the session with the lowest session ID per patient.
-After surgery / SRS, RC (Residual Cavity) can appear; it never exists
-at baseline, so predicting it there is always wrong.
+Rules applied in order:
+1. Zero RC (label 4) for pre-treatment cases.
+   Pre-treatment = the session with the lowest session ID per patient.
+   RC never exists at baseline, so predicting it there is always wrong.
+2. Remove small RC connected components (< --min_rc_voxels, default 50).
+   Eliminates isolated false-positive RC specks in post-treatment cases.
 
 Usage:
     python postprocess_met2026.py \
@@ -12,7 +14,6 @@ Usage:
         --out_dir  /pvc/nnunet/predictions/met2026/ensemble_postproc
 
 The script writes fixed .nii.gz files to out_dir (same filenames).
-Cases that are not pre-treatment are copied unchanged.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+from scipy.ndimage import label as cc_label
 
 
 RC_LABEL = 4
@@ -33,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--pred_dir", required=True, help="Directory with predicted .nii.gz files")
     p.add_argument("--out_dir",  required=True, help="Output directory")
+    p.add_argument("--min_rc_voxels", type=int, default=50,
+                   help="Remove RC connected components smaller than this (default: 50)")
     return p.parse_args()
 
 
@@ -76,6 +80,21 @@ def find_pretreatment_cases(pred_files: list[Path]) -> set[str]:
     return pre_treatment
 
 
+def remove_small_rc_components(data: np.ndarray, min_voxels: int) -> tuple[np.ndarray, int]:
+    """Zero out RC connected components smaller than min_voxels. Returns (data, n_removed)."""
+    rc_mask = data == RC_LABEL
+    if not rc_mask.any():
+        return data, 0
+    labeled, n_components = cc_label(rc_mask)
+    removed = 0
+    for comp_id in range(1, n_components + 1):
+        comp_mask = labeled == comp_id
+        if comp_mask.sum() < min_voxels:
+            data[comp_mask] = 0
+            removed += 1
+    return data, removed
+
+
 def main() -> None:
     args = parse_args()
     pred_dir = Path(args.pred_dir)
@@ -89,22 +108,40 @@ def main() -> None:
 
     pre_treatment = find_pretreatment_cases(pred_files)
     print(f"Found {len(pred_files)} predictions, {len(pre_treatment)} identified as pre-treatment")
+    print(f"RC small-component threshold: {args.min_rc_voxels} voxels")
 
     zeroed = 0
+    total_cc_removed = 0
     for f in pred_files:
         out_path = out_dir / f.name
+        img = nib.load(f)
+        data = np.asarray(img.dataobj).copy()
+        modified = False
+
+        # Rule 1: zero all RC in pre-treatment cases
         if f.name in pre_treatment:
-            img = nib.load(f)
-            data = np.asarray(img.dataobj).copy()
             rc_voxels = (data == RC_LABEL).sum()
             data[data == RC_LABEL] = 0
-            nib.save(nib.Nifti1Image(data, img.affine, img.header), out_path)
-            print(f"  [RC zeroed] {f.name}  ({rc_voxels} voxels removed)")
+            print(f"  [pre-tx RC zeroed] {f.name}  ({rc_voxels} voxels)")
             zeroed += 1
+            modified = True
+
+        # Rule 2: remove small RC components (applies to all cases)
+        data, n_removed = remove_small_rc_components(data, args.min_rc_voxels)
+        if n_removed:
+            print(f"  [RC CC filter]     {f.name}  ({n_removed} small components removed)")
+            total_cc_removed += n_removed
+            modified = True
+
+        if modified:
+            nib.save(nib.Nifti1Image(data, img.affine, img.header), out_path)
         else:
             shutil.copy2(f, out_path)
 
-    print(f"\nDone. RC zeroed in {zeroed} pre-treatment cases. Output: {out_dir}")
+    print(f"\nDone.")
+    print(f"  RC zeroed (pre-treatment): {zeroed} cases")
+    print(f"  RC small components removed: {total_cc_removed} total across all cases")
+    print(f"  Output: {out_dir}")
 
 
 if __name__ == "__main__":

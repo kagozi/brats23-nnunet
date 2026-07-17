@@ -1,0 +1,105 @@
+# nautilius/jobs/predict-nnunet-only-met2026-step25.yaml
+#
+# nnUNet 5-fold inference with improved settings:
+#   - --step_size 0.25  (sliding window overlap 0.75 instead of default 0.5)
+#   - TTA (mirror augmentation) ON by default (no --disable_tta flag)
+#   - RC CC filtering: components < 50 voxels removed in postprocessing
+#
+# Output lands at /pvc/nnunet/predictions/met2026_step25/
+#
+# Deploy : kubectl apply  -f nautilius/jobs/predict-nnunet-only-met2026-step25.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/predict-nnunet-met2026-step25 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/predict-nnunet-only-met2026-step25.yaml -n gai-lina-group
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: predict-nnunet-met2026-step25
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: predictor
+          image: ghcr.io/kagozi/brats23-nnunet:latest
+          imagePullPolicy: Always
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+
+              VAL_DIR=/pvc/nnunet/raw/Dataset002_BraTS2026_MET/imagesVal
+              PRED_BASE=/pvc/nnunet/predictions/met2026_step25
+              mkdir -p $PRED_BASE
+
+              echo "=== 1/3  nnUNet 5-fold predict (step_size=0.25, TTA on) ==="
+              nnUNetv2_predict \
+                -i  $VAL_DIR \
+                -o  $PRED_BASE/nnunet \
+                -d  002 \
+                -c  3d_fullres \
+                -f  0 1 2 3 4 \
+                --step_size 0.25 \
+                --continue_prediction \
+                -npp 1 -nps 1
+
+              echo ""
+              echo "=== 2/3  Post-process (pre-treatment RC zero + RC CC filter <50 voxels) ==="
+              python /workspace/postprocess_met2026.py \
+                --pred_dir $PRED_BASE/nnunet \
+                --out_dir  $PRED_BASE/final \
+                --min_rc_voxels 50
+
+              echo ""
+              echo "=== 3/3  Zip for Synapse submission ==="
+              python3 -c "import zipfile,pathlib; p=pathlib.Path('$PRED_BASE/final'); o=pathlib.Path('$PRED_BASE/submission.zip'); files=sorted(p.glob('*.nii.gz')); print('Zipping',len(files),'files'); zf=zipfile.ZipFile(o,'w',zipfile.ZIP_DEFLATED); [zf.write(f,f.name) for f in files]; zf.close(); print('Done',round(o.stat().st_size/1e6,1),'MB')"
+
+              echo ""
+              echo "=== Done. Submit $PRED_BASE/submission.zip to Synapse. ==="
+          env:
+            - name: nnUNet_raw
+              value: /pvc/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /pvc/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /pvc/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "6"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
+            limits:
+              cpu: "6"
+              memory: "40Gi"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "50Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "23000"
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
