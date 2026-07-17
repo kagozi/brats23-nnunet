@@ -10,7 +10,7 @@ class MedNextTrainerL(nnUNetTrainer):
     """
 
     def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True, **kwargs):
-        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset)
+        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, **kwargs)
         self.initial_lr = 1e-4
         self.weight_decay = 1e-5
         # MedNeXt v1 doesn't expose the decoder.deep_supervision interface that
