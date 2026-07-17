@@ -26,5 +26,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Core scripts (referenced as /workspace/<script>.py in all K8s jobs)
 COPY scripts/ /workspace/
 
+# Register MedNextTrainerL with nnUNetv2 so `nnUNetv2_train -tr MedNextTrainerL` works
+RUN cp /workspace/MedNextTrainerL.py \
+       /opt/conda/lib/python3.10/site-packages/nnunetv2/training/nnUNetTrainer/variants/network_architecture/MedNextTrainerL.py
+
 # Prototype experiment code
 COPY prototype_nnunet_evidence/ /workspace/prototype_nnunet_evidence/

@@ -1,22 +1,17 @@
-# nautilius/jobs/predict-nnunet-only-met2026.yaml
+# nautilius/jobs/predict-nnunet-only-met2026-anygpu.yaml
 #
-# Run inference on the BraTS 2026 MET validation set using the 5-fold
-# standard nnUNet ensemble only. Use this for the first Synapse validation
-# submission before ResEnc and MedNeXt training is complete.
+# Same pipeline as predict-nnunet-only-met2026.yaml but uses nvidia.com/gpu (generic)
+# so it can schedule on ANY GPU node (A6000, A40, generic-GPU nodes, etc.).
+# nnUNet 3d_fullres inference needs ~10 GB VRAM — any modern GPU is fine.
 #
-# Outputs:
-#   /pvc/nnunet/predictions/met2026/nnunet/   softmax + segmentations
-#   /pvc/nnunet/predictions/met2026/final/    post-processed (RC zeroed for pre-treatment)
-#   /pvc/nnunet/predictions/met2026/submission.zip  ready to upload to Synapse
-#
-# Deploy : kubectl apply  -f nautilius/jobs/predict-nnunet-only-met2026.yaml -n gai-lina-group
-# Monitor: kubectl logs -f job/predict-nnunet-only-met2026 -n gai-lina-group
-# Delete : kubectl delete -f nautilius/jobs/predict-nnunet-only-met2026.yaml -n gai-lina-group
+# Deploy : kubectl apply  -f nautilius/jobs/predict-nnunet-only-met2026-anygpu.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/predict-nnunet-only-met2026-anygpu -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/predict-nnunet-only-met2026-anygpu.yaml -n gai-lina-group
 
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: predict-nnunet-only-met2026
+  name: predict-nnunet-only-met2026-anygpu
   namespace: gai-lina-group
 spec:
   backoffLimit: 1
@@ -46,8 +41,8 @@ spec:
                 -d  002 \
                 -c  3d_fullres \
                 -f  0 1 2 3 4 \
-                --save_probabilities \
-                -npp 2 -nps 2
+                --continue_prediction \
+                -npp 1 -nps 1
 
               echo ""
               echo "=== 2/3  Post-process (zero RC for pre-treatment cases) ==="
@@ -57,8 +52,7 @@ spec:
 
               echo ""
               echo "=== 3/3  Zip for Synapse submission ==="
-              cd $PRED_BASE
-              zip -j submission.zip final/*.nii.gz
+              python3 -c "import zipfile,pathlib; p=pathlib.Path('$PRED_BASE/final'); o=pathlib.Path('$PRED_BASE/submission.zip'); files=sorted(p.glob('*.nii.gz')); print('Zipping',len(files),'files'); zf=zipfile.ZipFile(o,'w',zipfile.ZIP_DEFLATED); [zf.write(f,f.name) for f in files]; zf.close(); print('Done',round(o.stat().st_size/1e6,1),'MB')"
 
               echo ""
               echo "=== Done. Submit $PRED_BASE/submission.zip to Synapse. ==="
@@ -75,18 +69,27 @@ spec:
             requests:
               cpu: "6"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
               ephemeral-storage: "0"
             limits:
-              cpu: "7"
+              cpu: "6"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
               mountPath: /pvc
             - name: dshm
               mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "23000"
       volumes:
         - name: pvc
           persistentVolumeClaim:
@@ -94,4 +97,4 @@ spec:
         - name: dshm
           emptyDir:
             medium: Memory
-            sizeLimit: 24Gi
+            sizeLimit: 32Gi

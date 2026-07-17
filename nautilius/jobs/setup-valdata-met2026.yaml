@@ -1,0 +1,92 @@
+# nautilius/jobs/setup-valdata-met2026.yaml
+#
+# Extract the full 179-case BraTS 2026 MET validation zip that was uploaded to
+# /pvc/data/uploads/validation_batch1.zip, populate missing case dirs under
+# /pvc/data/brats2026-met/validation/, and create nnUNet imagesVal symlinks
+# for any cases not already present.
+#
+# Run AFTER kubectl cp of the validation zip completes.
+#
+# Deploy : kubectl apply -f nautilius/jobs/setup-valdata-met2026.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/setup-valdata-met2026 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/setup-valdata-met2026.yaml -n gai-lina-group
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-valdata-met2026
+  namespace: gai-lina-group
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: setup
+          image: ubuntu:22.04
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              apt-get update -qq && apt-get install -y -q unzip > /dev/null
+
+              ZIP=/pvc/data/uploads/validation_batch1.zip
+              VAL_SRC=/pvc/data/brats2026-met/validation
+              IVAL=/pvc/nnunet/raw/Dataset002_BraTS2026_MET/imagesVal
+
+              echo "=== Extracting zip to /tmp/valextract ==="
+              mkdir -p /tmp/valextract
+              unzip -q "$ZIP" -d /tmp/valextract
+              ls /tmp/valextract/
+
+              echo "=== Copying new case dirs to $VAL_SRC ==="
+              for case_dir in /tmp/valextract/Validation/BraTS-MET-*/; do
+                case_id=$(basename "$case_dir")
+                dest="$VAL_SRC/$case_id"
+                if [ ! -d "$dest" ]; then
+                  echo "  Copying $case_id"
+                  cp -r "$case_dir" "$dest"
+                elif [ "$(ls "$dest" | wc -l)" -lt 4 ]; then
+                  echo "  Patching incomplete $case_id ($(ls "$dest" | wc -l) files)"
+                  cp -r "$case_dir"* "$dest/"
+                else
+                  echo "  Skipping $case_id (already complete)"
+                fi
+              done
+
+              echo "=== Creating imagesVal symlinks for new cases ==="
+              for case_dir in "$VAL_SRC"/BraTS-MET-*/; do
+                case_id=$(basename "$case_dir")
+                link0="$IVAL/${case_id}_0000.nii.gz"
+                if [ ! -L "$link0" ]; then
+                  echo "  Linking $case_id"
+                  ln -sf "$case_dir${case_id}-t1n.nii.gz" "$IVAL/${case_id}_0000.nii.gz"
+                  ln -sf "$case_dir${case_id}-t1c.nii.gz" "$IVAL/${case_id}_0001.nii.gz"
+                  ln -sf "$case_dir${case_id}-t2w.nii.gz" "$IVAL/${case_id}_0002.nii.gz"
+                  ln -sf "$case_dir${case_id}-t2f.nii.gz" "$IVAL/${case_id}_0003.nii.gz"
+                fi
+              done
+
+              echo ""
+              echo "=== Final imagesVal count ==="
+              ls "$IVAL" | wc -l
+              echo "files (should be 716 = 179 cases x4)"
+
+              echo "=== Done ==="
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              ephemeral-storage: "20Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+              ephemeral-storage: "20Gi"
+          volumeMounts:
+            - name: pvc
+              mountPath: /pvc
+      volumes:
+        - name: pvc
+          persistentVolumeClaim:
+            claimName: brats23-pvc

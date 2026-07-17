@@ -1,25 +1,16 @@
 # nautilius/jobs/train-mednext-5fold-met2026.yaml
 #
-# Train MedNeXt-M (kernel size 3, 17.6M params) on Dataset002_BraTS2026_MET
-# using 5-fold cross-validation, all folds running in parallel.
+# Train MedNeXt-L (kernel_size=3, do_res=True) on Dataset002_BraTS2026_MET
+# using 5-fold cross-validation, all folds in parallel.
 #
-# MedNeXt-M uses ConvNeXt-style blocks in encoder and decoder.
-# It reuses the default nnUNetPlans preprocessing from the prepare job.
-# Trainer: MedNeXtTrainerM_kernel3 (registered in nnUNetv2 via mednext package)
+# Requires ≥40 GB VRAM (A100 / A6000).  Uses nvidia.com/gpu (generic) with a
+# node-affinity filter so it schedules on any ≥40 GB node and avoids the A100
+# quota bottleneck.
 #
-# Labels: 0=background, 1=NETC, 2=SNFH, 3=ET, 4=RC
+# Each job copies MedNextTrainerL.py into the nnunetv2 trainer variants dir
+# at startup, so it works with the current image without a rebuild.
 #
-# Prerequisites:
-#   - prepare-dataset-met2026 job completed (default nnUNetPlans available)
-#   - Docker image built with mednext in requirements.txt
-#
-# Outputs (per fold):
-#   /pvc/nnunet/results/Dataset002_BraTS2026_MET/
-#     MedNeXtTrainerM_kernel3__nnUNetPlans__3d_fullres/
-#       fold_{N}/checkpoint_best.pth
-#       fold_{N}/checkpoint_final.pth
-#
-# Deploy : kubectl apply  -f nautilius/jobs/train-mednext-5fold-met2026.yaml -n gai-lina-group
+# Deploy : kubectl apply -f nautilius/jobs/train-mednext-5fold-met2026.yaml -n gai-lina-group
 # Monitor: kubectl logs -f job/mednext-met2026-fold0 -n gai-lina-group
 # Delete : kubectl delete -f nautilius/jobs/train-mednext-5fold-met2026.yaml -n gai-lina-group
 
@@ -45,8 +36,10 @@ spec:
             - -c
             - |
               set -euo pipefail
+              cp /workspace/MedNextTrainerL.py \
+                /opt/conda/lib/python3.10/site-packages/nnunetv2/training/nnUNetTrainer/variants/network_architecture/MedNextTrainerL.py
               nnUNetv2_train 002 3d_fullres 0 \
-                -tr MedNeXtTrainerM_kernel3 \
+                -tr MedNextTrainerL \
                 --npz
           env:
             - name: nnUNet_raw
@@ -63,17 +56,27 @@ spec:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
               mountPath: /pvc
             - name: dshm
               mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "39000"
       volumes:
         - name: pvc
           persistentVolumeClaim:
@@ -105,8 +108,10 @@ spec:
             - -c
             - |
               set -euo pipefail
+              cp /workspace/MedNextTrainerL.py \
+                /opt/conda/lib/python3.10/site-packages/nnunetv2/training/nnUNetTrainer/variants/network_architecture/MedNextTrainerL.py
               nnUNetv2_train 002 3d_fullres 1 \
-                -tr MedNeXtTrainerM_kernel3 \
+                -tr MedNextTrainerL \
                 --npz
           env:
             - name: nnUNet_raw
@@ -123,17 +128,27 @@ spec:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
               mountPath: /pvc
             - name: dshm
               mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "39000"
       volumes:
         - name: pvc
           persistentVolumeClaim:
@@ -165,8 +180,10 @@ spec:
             - -c
             - |
               set -euo pipefail
+              cp /workspace/MedNextTrainerL.py \
+                /opt/conda/lib/python3.10/site-packages/nnunetv2/training/nnUNetTrainer/variants/network_architecture/MedNextTrainerL.py
               nnUNetv2_train 002 3d_fullres 2 \
-                -tr MedNeXtTrainerM_kernel3 \
+                -tr MedNextTrainerL \
                 --npz
           env:
             - name: nnUNet_raw
@@ -183,17 +200,27 @@ spec:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
               mountPath: /pvc
             - name: dshm
               mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "39000"
       volumes:
         - name: pvc
           persistentVolumeClaim:
@@ -225,8 +252,10 @@ spec:
             - -c
             - |
               set -euo pipefail
+              cp /workspace/MedNextTrainerL.py \
+                /opt/conda/lib/python3.10/site-packages/nnunetv2/training/nnUNetTrainer/variants/network_architecture/MedNextTrainerL.py
               nnUNetv2_train 002 3d_fullres 3 \
-                -tr MedNeXtTrainerM_kernel3 \
+                -tr MedNextTrainerL \
                 --npz
           env:
             - name: nnUNet_raw
@@ -243,17 +272,27 @@ spec:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
               mountPath: /pvc
             - name: dshm
               mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "39000"
       volumes:
         - name: pvc
           persistentVolumeClaim:
@@ -285,8 +324,10 @@ spec:
             - -c
             - |
               set -euo pipefail
+              cp /workspace/MedNextTrainerL.py \
+                /opt/conda/lib/python3.10/site-packages/nnunetv2/training/nnUNetTrainer/variants/network_architecture/MedNextTrainerL.py
               nnUNetv2_train 002 3d_fullres 4 \
-                -tr MedNeXtTrainerM_kernel3 \
+                -tr MedNextTrainerL \
                 --npz
           env:
             - name: nnUNet_raw
@@ -303,17 +344,27 @@ spec:
             requests:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
+              ephemeral-storage: "0"
             limits:
               cpu: "8"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/gpu: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
               mountPath: /pvc
             - name: dshm
               mountPath: /dev/shm
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values:
+                      - "39000"
       volumes:
         - name: pvc
           persistentVolumeClaim:

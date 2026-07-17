@@ -1,22 +1,17 @@
-# nautilius/jobs/predict-nnunet-only-met2026.yaml
+# nautilius/jobs/predict-nnunet-only-met2026-a6000.yaml
 #
-# Run inference on the BraTS 2026 MET validation set using the 5-fold
-# standard nnUNet ensemble only. Use this for the first Synapse validation
-# submission before ResEnc and MedNeXt training is complete.
+# Same pipeline as predict-nnunet-only-met2026.yaml but targets RTX A6000 (48 GB)
+# nodes instead of A100. Run in parallel with the A100 job — delete whichever
+# one loses the race once the other schedules.
 #
-# Outputs:
-#   /pvc/nnunet/predictions/met2026/nnunet/   softmax + segmentations
-#   /pvc/nnunet/predictions/met2026/final/    post-processed (RC zeroed for pre-treatment)
-#   /pvc/nnunet/predictions/met2026/submission.zip  ready to upload to Synapse
-#
-# Deploy : kubectl apply  -f nautilius/jobs/predict-nnunet-only-met2026.yaml -n gai-lina-group
-# Monitor: kubectl logs -f job/predict-nnunet-only-met2026 -n gai-lina-group
-# Delete : kubectl delete -f nautilius/jobs/predict-nnunet-only-met2026.yaml -n gai-lina-group
+# Deploy : kubectl apply  -f nautilius/jobs/predict-nnunet-only-met2026-a6000.yaml -n gai-lina-group
+# Monitor: kubectl logs -f job/predict-nnunet-only-met2026-a6000 -n gai-lina-group
+# Delete : kubectl delete -f nautilius/jobs/predict-nnunet-only-met2026-a6000.yaml -n gai-lina-group
 
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: predict-nnunet-only-met2026
+  name: predict-nnunet-only-met2026-a6000
   namespace: gai-lina-group
 spec:
   backoffLimit: 1
@@ -75,12 +70,12 @@ spec:
             requests:
               cpu: "6"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/rtxa6000: "1"
               ephemeral-storage: "0"
             limits:
-              cpu: "7"
+              cpu: "6"
               memory: "40Gi"
-              nvidia.com/a100: "1"
+              nvidia.com/rtxa6000: "1"
               ephemeral-storage: "50Gi"
           volumeMounts:
             - name: pvc
