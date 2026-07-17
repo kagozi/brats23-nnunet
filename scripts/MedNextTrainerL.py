@@ -9,10 +9,11 @@ class MedNextTrainerL(nnUNetTrainer):
     Requires nnunet_mednext to be installed (already in the Docker image).
     """
 
-    def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True, **kwargs):
-        # This nnUNetv2 version's base class does not accept unpack_dataset; absorb it here only.
+    def __init__(self, plans, configuration, fold, dataset_json, device=torch.device('cuda'), **kwargs):
+        # Base class signature is (plans, configuration, fold, dataset_json, device).
+        # run_training.py also passes unpack_dataset=; absorb it in **kwargs, don't forward it.
         super().__init__(plans=plans, configuration=configuration, fold=fold,
-                         dataset_json=dataset_json, **kwargs)
+                         dataset_json=dataset_json, device=device)
         self.initial_lr = 1e-4
         self.weight_decay = 1e-5
         # MedNeXt v1 doesn't expose the decoder.deep_supervision interface that
