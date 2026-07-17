@@ -9,11 +9,13 @@ class MedNextTrainerL(nnUNetTrainer):
     Requires nnunet_mednext to be installed (already in the Docker image).
     """
 
-    initial_lr = 1e-4
-    weight_decay = 1e-5
-    # MedNeXt v1 doesn't expose the decoder.deep_supervision interface that
-    # nnUNetv2 expects, so we disable it and use a single-output loss.
-    enable_deep_supervision = False
+    def __init__(self, plans, configuration, fold, dataset_json, unpack_dataset=True):
+        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset)
+        self.initial_lr = 1e-4
+        self.weight_decay = 1e-5
+        # MedNeXt v1 doesn't expose the decoder.deep_supervision interface that
+        # nnUNetv2 expects, so disable DS after super().__init__ sets it True.
+        self.enable_deep_supervision = False
 
     @staticmethod
     def build_network_architecture(architecture_class_name, arch_init_kwargs,
