@@ -90,10 +90,6 @@ def main() -> None:
                 img_dst.symlink_to(img_src.resolve())
 
     # --- symlink ALL validation cases (we want RC predictions on everything) ---
-    val_cases = sorted({f.name.split("_")[0] + "_" + f.name.split("_")[1] + "_" +
-                        f.name.split("_")[2] + "_" + f.name.split("_")[3]
-                        for f in src_images_val.glob("*_0000.nii.gz")})
-    # simpler: just symlink every file in imagesVal
     for src_file in sorted(src_images_val.glob("*.nii.gz")):
         dst_file = dst_images_val / src_file.name
         if not dst_file.exists():
